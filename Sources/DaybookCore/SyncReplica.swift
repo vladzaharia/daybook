@@ -133,19 +133,32 @@ public struct SyncCloudFiles: Sendable {
     public var downloadFraction: @Sendable (URL) -> Double?
     /// Whether an item has reached the cloud. Gates evicting originals recorded on this device.
     public var isUploaded: @Sendable (URL) -> Bool
+    /// What the provider itself says of an item having reached the cloud: true or false for an item it answers for (an
+    /// iCloud item), nil when it can't say (not an iCloud item, or it couldn't be asked: a container detached after the
+    /// person signed out). What letting a file go on the strength of iCloud's copy asks (`LibrarySyncEngine.isObjectUploaded`).
+    public var uploadState: @Sendable (URL) -> Bool?
+    /// Whether a sync folder is in iCloud Drive: there, an item the provider can't answer for (`uploadState` nil) isn't
+    /// taken for uploaded.
+    public var isICloudFolder: @Sendable (URL) -> Bool
     /// Best-effort request to drop the provider's local copy of an item that is safely in the cloud.
     public var evictLocalCopy: @Sendable (URL) -> Void
     /// Whether iCloud refused to upload an item because the person's iCloud storage is full
     /// (`ubiquitousItemUploadingError`, `CocoaError.ubiquitousFileNotUploadedDueToQuota`).
     public var uploadRefusedForQuota: @Sendable (URL) -> Bool
 
+    /// Without `uploadState`, the provider answers for every item as `isUploaded` does; without `isICloudFolder`, no folder
+    /// is in iCloud Drive (a test's folders).
     public init(requestDownload: @escaping @Sendable (URL) throws -> Void,
                 downloadFraction: @escaping @Sendable (URL) -> Double? = { _ in nil },
                 isUploaded: @escaping @Sendable (URL) -> Bool,
+                uploadState: (@Sendable (URL) -> Bool?)? = nil,
+                isICloudFolder: @escaping @Sendable (URL) -> Bool = { _ in false },
                 evictLocalCopy: @escaping @Sendable (URL) -> Void = { _ in },
                 uploadRefusedForQuota: @escaping @Sendable (URL) -> Bool = SyncCloudFiles.systemQuotaRefusal) {
         self.requestDownload = requestDownload; self.downloadFraction = downloadFraction
         self.isUploaded = isUploaded; self.evictLocalCopy = evictLocalCopy; self.uploadRefusedForQuota = uploadRefusedForQuota
+        self.uploadState = uploadState ?? { isUploaded($0) }
+        self.isICloudFolder = isICloudFolder
     }
 
     /// The system's answer for `uploadRefusedForQuota`: false for anything that isn't an iCloud item.
@@ -163,6 +176,17 @@ public struct SyncCloudFiles: Sendable {
             let values = try? url.promisedItemResourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey])
             if values?.isUbiquitousItem == true { return values?.ubiquitousItemIsUploaded == true }
             return FileManager.default.fileExists(atPath: url.path)
+        },
+        uploadState: { url in
+            // Only an item iCloud answers for: an error, or an item it doesn't call its own, says nothing.
+            guard let values = try? url.promisedItemResourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey]),
+                  values.isUbiquitousItem == true else { return nil }
+            return values.ubiquitousItemIsUploaded == true
+        },
+        isICloudFolder: { url in
+            // An iCloud container (`Library/Mobile Documents`) is iCloud Drive's even while the provider doesn't answer for it.
+            url.standardizedFileURL.path.contains("/Library/Mobile Documents/")
+                || (try? url.promisedItemResourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
         },
         evictLocalCopy: { url in
             guard (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true else { return }

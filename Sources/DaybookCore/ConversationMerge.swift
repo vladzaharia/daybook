@@ -265,6 +265,20 @@ public enum ConversationMerge {
             return personName(own) != nil && personName(own) == before[target].flatMap(personName) ? target : "\(folded.id.uuidString):\(id)"
         }
 
+        // Voice clips of the recordings it carries, carried from it: voiceprints still name the folded conversation, so
+        // each is still its source's, at the same path (the file comes into the merged folder with the recordings), on the
+        // recording's copy here. One of a source the merged conversation already names stays as it is there.
+        if merged.voiceClipsAreReadable {
+            let mapping = Dictionary(carried.compactMap { track in copy(track.id).map { (track.id, $0) } }, uniquingKeysWith: { first, _ in first })
+            let named = Set((merged.voiceClips ?? []).map { $0.source(in: merged.id).key })
+            let clips = folded.voiceClipsCarried(mapping).filter { !named.contains($0.source(in: merged.id).key) }.map { clip in
+                var copied = clip
+                copied.speakerID = speaker(clip.speakerID) ?? clip.speakerID
+                return copied
+            }
+            if !clips.isEmpty { merged.voiceClips = ((merged.voiceClips ?? []) + clips).sorted { $0.id < $1.id } }
+        }
+
         // Transcript runs, each on its recording's copy: every run is kept, the latest is the one fused.
         let knownRuns = Set(merged.transcripts.map(\.id))
         var runs: [TrackTranscript] = []

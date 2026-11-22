@@ -78,6 +78,22 @@ final class MeetingExportTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: MeetingExport.json(meeting)), meeting)
     }
 
+    /// Full Data already carries the recordings' internals (each track's path, digest, and a compressed one's original),
+    /// so a conversation's voice clip records are in it too, as they are: every field, read back the same.
+    func testBehaviorFullDataCarriesVoiceClipRecordsAsItDoesTheRecordingsInternals() throws {
+        let track = RecordingTrack(source: .microphone, relativePath: "Originals/m.caf", fileName: "microphone.caf", sha256: String(repeating: "a", count: 64))
+        let source = VoiceClipSource(meetingID: UUID(), trackID: track.id, speakerID: "run:1")
+        var meeting = Meeting(id: source.meetingID, title: "Planning", tracks: [track])
+        let sha = String(repeating: "c", count: 64)
+        meeting.voiceClips = [VoiceClip(trackID: track.id, speakerID: "run:1", relativePath: VoiceClip.relativePath(for: source, sha256: sha), sha256: sha,
+                                        size: 1, originalSHA256: track.sha256, originalFrames: 10, sampleRate: 16_000, channels: 1,
+                                        ranges: [VoiceClipRange(startFrame: 0, endFrame: 5)], createdAt: Date(timeIntervalSince1970: 1_800_000_000))]
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingExport.json(meeting)) as? [String: Any])
+        XCTAssertNotNil((object["tracks"] as? [[String: Any]])?.first?["relativePath"])
+        XCTAssertEqual((object["voiceClips"] as? [[String: Any]])?.first?["sha256"] as? String, sha)
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: MeetingExport.json(meeting)), meeting)
+    }
+
     func testADerivedRecordingSaysHowItWasMade() {
         let microphone = RecordingTrack(source: .microphone, relativePath: "Originals/m.caf", fileName: "microphone.caf")
         let cleaned = RecordingTrack(source: .microphone, relativePath: "Originals/e.caf", fileName: "microphone-echo-cancelled.caf",

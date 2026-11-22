@@ -22,6 +22,8 @@ public enum RecordingCompressionPlanner {
         /// Conversations whose processing status is done.
         public var done: Set<UUID>
         public var upgradeOffered: Set<UUID>
+        /// The voiceprints that hold their recordings back: each whose source no clip here covers yet
+        /// (`LibraryController.holdingBackVoiceprints`).
         public var voiceprints: [Voiceprint]
         /// Conversations no longer in the library (the Trash, and those deleted from it for good, as their tombstones keep
         /// them: `LibraryController.compressionLineage`) whose audio may live on in one that is: a voiceprint's
@@ -91,8 +93,10 @@ public enum RecordingCompressionPlanner {
 
     public static func facts(_ meeting: Meeting, _ inputs: Inputs, learned: Set<UUID>,
                              tracks: [UUID: RecordingCompressionEligibility.TrackFacts]? = nil) -> RecordingCompressionEligibility.ConversationFacts {
+        // A name given before its voice was known teaches its profile once the voice is made from the original.
         .init(isBusy: inputs.inUse.contains(meeting.id), isTrashed: inputs.trashed.contains(meeting.id), isDone: inputs.done.contains(meeting.id),
-              offersUpgrade: inputs.upgradeOffered.contains(meeting.id), teachesVoiceProfile: learned.contains(meeting.id),
+              offersUpgrade: inputs.upgradeOffered.contains(meeting.id),
+              teachesVoiceProfile: learned.contains(meeting.id) || meeting.awaitsVoiceForNamedSpeaker,
               tracks: tracks ?? Dictionary(uniqueKeysWithValues: meeting.tracks.map { ($0.id, assumedTrack) }))
     }
 

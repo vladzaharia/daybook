@@ -213,6 +213,9 @@ public actor LibrarySyncEngine {
     public internal(set) var storageFullLately = false
     /// What the sealer reported on the last pass that ran it.
     public internal(set) var sealerProgress: SealerProgress?
+    /// Conversations whose superseded originals voice profiles still need in iCloud (`holdOriginalsInICloud`); nil until
+    /// the library says, and then every one is (LibrarySyncCompression.swift).
+    public internal(set) var originalsHeldForVoice: (held: Set<UUID>, judged: Set<UUID>)?
     /// The library the journal caches describe (`forgetOtherLibraries`).
     private var cachedLibraryID: UUID?
     /// The network this device is on now, for the sealer's downloads.
@@ -673,12 +676,14 @@ public actor LibrarySyncEngine {
             if pass.pendingDownloads == 0, pass.budget.deferred == 0, !journalIncomplete {
                 removeRetiredKeys(entries: pass.eventEntries + pass.metadataEntries, knownShas: namedAssets, now: sealerClock())
             }
+            let live = withOriginalsHeldForVoice(pass.liveAssets, meetings: pass.output)
             sealerProgress = runSealer(SealerInput(events: pass.events, metadata: pass.metadata,
                                                    eventEntries: pass.eventEntries.filter { !setAsideFromSealer($0) },
                                                    metadataEntries: pass.metadataEntries.filter { !setAsideFromSealer($0) },
                                                    compactionEntries: compactionRuntime.records.values.map(\.entry)
                                                        .filter { !sealingRuntime.replacedEntries.contains($0.path) },
-                                                   deleted: pass.deletes, liveAssets: pass.liveAssets, complete: complete), budget: &pass.budget, now: sealerClock())
+                                                   deleted: pass.deletes, liveAssets: live.assets, complete: complete, optional: live.optional),
+                                       budget: &pass.budget, now: sealerClock())
             // A library that started over: what's left here of the one it replaced goes (a rival's once it's safe), and
             // then its keys.
             deleteReplacedObjects(journalAssets: namedAssets)
@@ -1576,6 +1581,7 @@ public actor LibrarySyncEngine {
         }
         try appendPhotoAssets(&meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
         try appendPageAssets(meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
+        try appendVoiceClipAssets(meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
         let originals = directory.appendingPathComponent("Originals", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: originals, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
             // In name order, so publishing the same conversation again writes the same bytes.
@@ -1594,7 +1600,7 @@ public actor LibrarySyncEngine {
         return (meeting, assets, 0)
     }
 
-    private func upload(_ asset: SyncAsset, from source: URL) throws {
+    func upload(_ asset: SyncAsset, from source: URL) throws {
         if let sealing { return try uploadSealed(asset, from: source, sealing: sealing) }
         let target = blobURL(asset.sha256)
         // Never download an object just to re-verify it: iCloud holds it, under the name its content gives it. On a phone
@@ -1653,9 +1659,11 @@ public actor LibrarySyncEngine {
         }
         try validatePhotoAssets(snapshot, assets: assets)
         try validatePageAssets(snapshot)
+        try validateVoiceClipAssets(snapshot)
     }
     private func mergedAssets(for meeting: Meeting, eventIDs: [String], events: [String: SyncEventHeader]) -> [SyncAsset] {
         var assets = meeting.tracks.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) } + photoAssets(of: meeting) + pageAssets(of: meeting)
+            + voiceClipAssets(of: meeting)
         for id in eventIDs.sorted() {
             for asset in events[id]?.assets ?? [] where asset.relativePath.contains(".highlights-") && !assets.contains(asset) { assets.append(asset) }
         }
@@ -1672,6 +1680,11 @@ public actor LibrarySyncEngine {
             try Task.checkCancellation()
             let destination = try LocalFiles.relativeURL(asset.relativePath, in: directory)
             try SyncFiles.noSymlinks(destination, below: localRoot)
+            // A voice clip never holds its conversation back (LibrarySyncVoiceClips.swift).
+            if Self.isVoiceClip(asset) {
+                _ = try hydrateVoiceClip(asset, at: destination, in: directory, warnings: &warnings)
+                continue
+            }
             if try verified(destination, digest: asset.sha256) {
                 // A page's file that's named again (a revert) is used now, whatever its age: pruning must not take it.
                 if asset.relativePath.hasPrefix(PageDrawing.folder + "/") { LocalFiles.touch(destination, unlessWithin: 3_600) }

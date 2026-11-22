@@ -157,7 +157,7 @@ extension LibrarySyncEngine {
         var record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                       canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation,
                                       activity: stamped)
-        record.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature]
+        record.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature]
         record.compaction = state.compactionAck
         record.capabilities = device.capabilities
         record.appInstallation = appInstallation
@@ -249,7 +249,7 @@ extension LibrarySyncEngine {
             var known = KnownSyncDevice(id: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                         canProcess: device.canProcess, audioPolicy: audioPolicy,
                                         lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity)
-            known.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature]
+            known.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature]
             known.capabilities = device.capabilities
             known.keyState = sealing.map { SyncDeviceKeyState(state: .ready, id: $0.current.idHex) }
                 ?? waitingForKey.map { SyncDeviceKeyState(state: .waiting, id: $0) }
