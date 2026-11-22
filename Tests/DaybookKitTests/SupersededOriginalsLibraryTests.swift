@@ -70,6 +70,105 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         return url
     }
 
+    /// A single Mac's library with a recording compressed, nothing holding its original: listed and acknowledged, and due a
+    /// day after the moment returned.
+    private func listed() async throws -> (library: LibraryController, object: URL, acknowledged: Date) {
+        let cloud = root.appendingPathComponent("Cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
+        let library = try await library(cloud: cloud)
+        let id = library.newMeeting(title: "Planning")
+        await library.acquireLock()
+        let ingested = try await library.ingest(try recording(), into: id, provenance: .file(source: .microphone))
+        library.releaseLock()
+        let track = try XCTUnwrap(ingested.track)
+        try await library.flushDurably()
+        var now = Date()
+        try await pass(library, at: now)
+        let listener = RecordingCompressionListener(model: "parakeet/test", isDeterministic: true) { _, spans in
+            spans.map { _ in (0..<40).map { "word\($0)" }.joined(separator: " ") }
+        }
+        let compressed = await library.compressRecordings([track.id], in: id, device: library.sync?.deviceID, listener: listener)
+        XCTAssertEqual(compressed, [track.id])
+        for _ in 0..<8 {
+            now = now.addingTimeInterval(60)
+            try await pass(library, at: now)
+            if let since = await library.sync?.engine?.supersededState().objects[track.sha256]?.acknowledgedSince {
+                return (library, cloud.appendingPathComponent("Blobs/\(track.sha256)"), since)
+            }
+        }
+        struct NeverListed: Error {}
+        XCTFail("the original was never listed")
+        throw NeverListed()
+    }
+
+    private func notice(_ library: LibraryController) async throws -> SupersededRecord? {
+        let engine = try XCTUnwrap(library.sync?.engine)
+        let deviceID = await engine.deviceID
+        let url = root.appendingPathComponent("Cloud/Superseded/\(SupersededRecord.fileName(for: deviceID))")
+        return FileManager.default.fileExists(atPath: url.path) ? SupersededRecord.decode(try Data(contentsOf: url)) : nil
+    }
+
+    /// What the library says keeps an original whose day is up: Never, settings a newer Daybook wrote that this version
+    /// skipped, a setting or a voiceprint or profile in a shape it can't read (nothing is listed); and settings that aren't
+    /// the library's as sync last delivered them (nothing comes due, the wait goes on).
+    func testBehaviorTheLibrarysSettingsKeepItWhenTheyMust() async throws {
+        let (library, object, since) = try await listed()
+        try await pass(library, at: since.addingTimeInterval(day - 60))
+        var now = since.addingTimeInterval(day + 60)
+        func newer<Value: Codable>(_ type: Value.Type) throws -> LibraryValue<Value> {
+            try JSONDecoder().decode(LibraryValue<Value>.self, from: Data(#"{"id":"new","value":{"newerShape":true},"modifiedAt":0}"#.utf8))
+        }
+        let stops: [(String, () throws -> Void, () -> Void)] = [
+            ("Never", { library.setRecordingCompression(.never) }, { library.setRecordingCompression(.after30Days) }),
+            ("newer settings skipped", { library.newerSettingsSkipped = true }, {}),
+            ("a folder it can't read", { let value = try newer(LibraryFolder.self); library.updateMetadata { $0.folders.append(value) } },
+             { library.updateMetadata { $0.folders.removeAll { $0.id == "new" } } }),
+            ("a voiceprint it can't read", { let value = try newer(Voiceprint.self); library.updateMetadata { $0.voiceprints = [value] } },
+             { library.updateMetadata { $0.voiceprints = [] } }),
+            ("a profile it can't read", { let value = try newer(SpeakerProfile.self); library.updateMetadata { $0.speakerProfiles = [value] } },
+             { library.updateMetadata { $0.speakerProfiles = [] } }),
+        ]
+        for (name, stop, undo) in stops {
+            try stop()
+            try await single(library, at: now)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), name)
+            let listing = try await notice(library)
+            XCTAssertEqual(listing?.objects, [], "\(name): listed no more")
+            let voice = await library.sync?.engine?.originalsHeldForVoice
+            XCTAssertNil(voice.map(\.held), "\(name): every one held, the sealer's included")
+            undo()
+            // Listed again from the start, a day watched from then.
+            for _ in 0..<3 { now = now.addingTimeInterval(60); try await single(library, at: now) }
+            let state = await library.sync?.engine?.supersededState()
+            let wait = try XCTUnwrap(state?.objects.first?.value, name)
+            try await pass(library, at: try XCTUnwrap(wait.acknowledgedSince).addingTimeInterval(day - 60))
+            now = try XCTUnwrap(wait.acknowledgedSince).addingTimeInterval(day + 60)
+        }
+        // Settings not the library's as sync last delivered them: the wait goes on, nothing comes due on that pass.
+        library.settingsAppliedFromSync = nil
+        let before = await library.sync?.engine?.supersededState().objects.first?.value
+        try await single(library, at: now)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "settings not current")
+        let after = await library.sync?.engine?.supersededState().objects.first?.value
+        XCTAssertEqual(after?.since, before?.since)
+        try await single(library, at: now.addingTimeInterval(60))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
+    }
+
+    /// Never chosen while the pass ran: what it found due stays, asked again right before deleting.
+    func testBehaviorNeverChosenDuringThePassKeepsIt() async throws {
+        let (library, object, since) = try await listed()
+        try await pass(library, at: since.addingTimeInterval(day - 60))
+        library.syncApplyFault = { [unowned library] in MainActor.assumeIsolated { library.setRecordingCompression(.never) } }
+        try await single(library, at: since.addingTimeInterval(day + 60))
+        library.syncApplyFault = nil
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path))
+        try await single(library, at: since.addingTimeInterval(day + 120))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path))
+        let listing = try await notice(library)
+        XCTAssertEqual(listing?.objects, [])
+    }
+
     /// A single Mac's library: a recording compressed, then a voice profile learning from it with no clip of its speech
     /// yet (the original is still here). Its original's object stays in iCloud while that voiceprint's clip isn't
     /// confirmed there; once a clip is cut and uploaded, it's free, and it goes a day later, deleted by the library's own
@@ -112,6 +211,13 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         }
         let held = await library.meetingsHoldingOriginalsInICloud()
         XCTAssertEqual(held, [id])
+        // A conversation in the Trash that can't be read may be where that voiceprint's recording went: nothing is said.
+        let unreadable = root.appendingPathComponent("Mac/Trash/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
+        try Data("{".utf8).write(to: unreadable.appendingPathComponent("meeting.json"))
+        let unsaid = await library.meetingsHoldingOriginalsInICloud()
+        XCTAssertNil(unsaid)
+        try FileManager.default.removeItem(at: unreadable)
         now = now.addingTimeInterval(3 * day)
         try await pass(library, at: now)
         XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "a voiceprint whose clip isn't in iCloud holds it")
@@ -139,7 +245,10 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         try await single(library, at: now.addingTimeInterval(day + 60), acknowledged: false)
         XCTAssertTrue(FileManager.default.fileExists(atPath: object.path))
         library.syncApplyFault = nil
+        // Nor does the next, its settings not known to be current after a pass that stopped; the one after it does.
         try await pass(library, at: now.addingTimeInterval(day + 120))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path))
+        try await pass(library, at: now.addingTimeInterval(day + 180))
         XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: cloud.appendingPathComponent("Blobs/\(try XCTUnwrap(library.meeting(id)?.tracks.first?.sha256))").path))
     }

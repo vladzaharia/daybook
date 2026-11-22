@@ -97,6 +97,25 @@ extension LibraryController {
         trashedIDs(in: root).compactMap { trashedMeeting($0, in: root) }.sorted { $0.date > $1.date }
     }
 
+    /// Every conversation in the Trash under a library's root, or nil when the Trash can't be listed or one there that was
+    /// saved can't be read (damaged, or a newer Daybook's).
+    nonisolated static func readableTrash(in root: URL) -> [Meeting]? {
+        let trash = root.appendingPathComponent("Trash", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: trash.path) else { return [] }
+        guard let folders = try? FileManager.default.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return nil
+        }
+        var result: [Meeting] = []
+        for folder in folders {
+            guard let id = UUID(uuidString: folder.lastPathComponent), !TrashTombstone.marks(folder),
+                  ["meeting.json", "meeting.recovery.json"].contains(where: { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) })
+            else { continue }
+            guard let meeting = MeetingStore.readableTrashedMeeting(id, in: folder) else { return nil }
+            result.append(meeting)
+        }
+        return result
+    }
+
     /// A conversation's last saved copy in the Trash under a library's root, as the Trash lists it
     /// (`MeetingStore.readableTrashedMeeting`).
     nonisolated static func trashedMeeting(_ id: UUID, in root: URL) -> Meeting? {

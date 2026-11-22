@@ -23,9 +23,10 @@ extension LibrarySyncEngine {
     /// iCloud). The sealer counts each one's as live, so rotating keys seals it again rather than retiring it, by the same
     /// rule anything else that lets a superseded original go from iCloud follows. Nil (not said yet, or a device that
     /// can't say): every one counts, as does any conversation the library didn't judge (`judged`: one that arrives in the
-    /// pass).
-    public func holdOriginalsInICloud(for meetings: Set<UUID>?, judged: Set<UUID> = []) {
+    /// pass). `judgment`: whether the compacting Mac may judge superseded originals at all (`SupersededJudgment`).
+    public func holdOriginalsInICloud(for meetings: Set<UUID>?, judged: Set<UUID> = [], judgment: SupersededJudgment = .judge) {
         originalsHeldForVoice = meetings.map { (held: $0, judged: judged) }
+        supersededRuntime.judgment = judgment
     }
 
     /// The library is encrypted here: its sealer decides which objects stay (`holdOriginalsInICloud`).

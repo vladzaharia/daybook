@@ -724,7 +724,9 @@ public actor LibrarySyncEngine {
             runCompaction(CompactionInput(events: pass.events, metadata: pass.metadata, metadataHeads: metadataHeads,
                                           entries: (pass.eventEntries + pass.metadataEntries).filter { !sealingRuntime.replacedEntries.contains($0.path) },
                                           deleted: pass.deletes, complete: complete, meetings: pass.localMeetings,
-                                          settingsChanged: settingsChanged, changed: pass.changed), now: compactionClock())
+                                          settingsChanged: settingsChanged, changed: pass.changed, unapplied: pass.failedPublications),
+                          now: compactionClock())
+            pass.warnings += supersededWarnings(now: compactionClock())
         } else {
             supersededRuntime.due = [:]
         }
@@ -744,7 +746,7 @@ public actor LibrarySyncEngine {
         presenceUploads = pass.pendingUploads
         presenceStorageFull = uploads.storageFull
         // What this device acknowledges of compacting Macs' notices, and holds (LibrarySyncSuperseded.swift).
-        noteSupersededAcks(pass.localMeetings)
+        noteSupersededAcks(pass.localMeetings, at: presenceClock())
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: presenceClock(), force: false) }
         let written = takeCourierWrites()

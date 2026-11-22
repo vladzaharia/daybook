@@ -13,18 +13,22 @@ import Foundation
 // - The acknowledgement. Each device says in its presence (`SyncDeviceRecord.superseded`) the latest sequence and the
 //   epoch of each notice it has read, and which objects listed there, or possibly gone, its own library still names (a
 //   track's file, its Trash included): those it holds. With it, the journal entries it wrote lately
-//   (`SyncDeviceRecord.written`). An object goes only once every device seen in the last 30 days lists `superseded-1`,
-//   acknowledges a sequence at or after the object's in the notice's epoch without holding it, has done so for a day, and
-//   has written its presence again after that day, every entry it says it wrote applied here.
+//   (`SyncDeviceRecord.written`, as it stands at each presence write), and when it worked the acknowledgements out on a
+//   full pass (`SyncDeviceRecord.supersededAt`). An object goes only once every device seen in the last 30 days lists
+//   `superseded-1`, acknowledges a sequence at or after the object's in the notice's epoch without holding it, has done
+//   so for a day, and has acknowledged again on a full pass after that day, seen here in the last six hours, every entry
+//   it says it wrote applied here.
 // - Possibly gone. On every device, a SHA-256 its library knows as a superseded original (`encoding.previousSHA256`),
 //   one a record lists, and one a record says was deleted is possibly gone: a file of it is never let go on the strength
 //   of the object (`evictAudio`), an on-demand replica never publishes it by reference unless the object is here and no
 //   live notice lists it, and a device holding its bytes uploads it again whenever a live conversation names it and
 //   iCloud doesn't have it (`repairSupersededObjects`). A deleted one named again is a warning, and its absence never
 //   holds a conversation back.
+// - The library's word. Before each pass the library says which conversations voice profiles hold, and whether to judge
+//   at all (`SupersededJudgment`): under Never, or with settings this version can't read, nothing is listed.
 // - The deletion happens after a pass that was applied and acknowledged, under the library's lock, with everything asked
-//   again with nothing awaited: the library's conversations and the voice profiles' holds as they are then
-//   (`deleteSupersededObjects`).
+//   again with nothing awaited: the library's conversations, its settings, and the voice profiles' holds as they are
+//   then (`deleteSupersededObjects`).
 
 /// A moment by this device's continuous clock (`mach_continuous_time`: it counts through sleep, and nobody can set it)
 /// and the boot it counts from (`kern.bootsessionuuid`; empty when it can't be read, and then nothing is compared).
@@ -145,6 +149,14 @@ struct SupersededWatermark: Codable, Equatable {
     var complete: Bool
 }
 
+/// What the library says of judging superseded originals, beside which conversations voice profiles hold
+/// (`LibrarySyncEngine.holdOriginalsInICloud`): judge them; pause (its settings aren't the library's yet: a wait goes on,
+/// nothing comes due); or stop (Never was chosen, or a setting or voiceprint is in a shape this version can't read: the
+/// notice lists nothing).
+public enum SupersededJudgment: Sendable, Equatable {
+    case judge, pause, stop
+}
+
 /// A journal entry this device wrote, kept in its checkpoint for its watermark (`SupersededWatermark`).
 struct SyncRecentWrite: Codable, Equatable {
     var id: String
@@ -153,17 +165,22 @@ struct SyncRecentWrite: Codable, Equatable {
 
 /// What the compacting Mac remembers of superseded objects between passes, beside its checkpoint (never synced): its
 /// epoch, each object free to go and since when, its object's stamp then, when every device first acknowledged it, the
-/// sequence of its notice, the log of deletions, when it last checked, and each other device's presence as it last saw
-/// it. Lost or damaged, a new epoch begins and every wait starts again; the sequence and the log come back from its own
-/// synced record.
+/// sequence of its notice, the log of deletions, when it last checked and how long it has watched, and each other
+/// device's presence as it last saw it. Lost or damaged, a new epoch begins and every wait starts again; the sequence
+/// and the log come back from its own synced record.
 struct SupersededObjectsState: Codable, Equatable {
-    var schemaVersion = 3
+    var schemaVersion = 4
     var epoch: String
     var objects: [String: Candidate] = [:]
     var sequence = 0
     var deleted: [String: SupersededRecord.Deletion] = [:]
     var lastCheck: Date?
     var lastClock: SyncClockMark?
+    /// Seconds this Mac has watched, check after check: what the continuous clock moved between two checks at most
+    /// `supersededCheckGap` apart (a longer gap, asleep or off, isn't counted), within a boot.
+    var watched: TimeInterval = 0
+    /// The first check after such a gap: every device must be seen since before anything comes due.
+    var wokeAt: Date?
     var presence: [String: SeenPresence] = [:]
 
     init(epoch: String) { self.epoch = epoch }
@@ -172,18 +189,20 @@ struct SupersededObjectsState: Codable, Equatable {
         /// The copies of every recording here whose original it is.
         var copies: [String]
         var since: Date
-        var clock: SyncClockMark
+        /// `watched` when it became free, and when every device first acknowledged it.
+        var sinceWatched: TimeInterval
         var stamp: VerifiedAsset
         /// The notice's sequence when it was listed.
         var sequence: Int
         var acknowledgedSince: Date?
-        var acknowledgedClock: SyncClockMark?
+        var acknowledgedWatched: TimeInterval?
     }
 
-    /// Another device's presence as this Mac saw it: the date it said it was written, when (by this Mac's clock) this Mac
-    /// first saw that, and the app installations seen writing it, with when each was last seen.
+    /// Another device's presence as this Mac saw it: when it says it last acknowledged (`SyncDeviceRecord.supersededAt`,
+    /// which only its full passes advance), when (by this Mac's clock) this Mac first saw that, and the app
+    /// installations seen writing it, with when each was last seen.
     struct SeenPresence: Codable, Equatable {
-        var lastSeen: Date
+        var supersededAt: Date?
         var at: Date
         var installations: [String: Date] = [:]
     }
@@ -202,12 +221,25 @@ struct SupersededRuntime {
     /// conversation in its library or Trash that can't be read), and then it acknowledges nothing.
     var acks: [SupersededAck]?
     var written: SupersededWatermark?
+    /// When this device last worked out its acknowledgements and watermark, on a full pass (`supersededAt`).
+    var acksAt: Date?
+    /// Since when this Mac's own notice is there but unread, whether it was read but isn't a notice (damaged, too large),
+    /// and whether its last write was refused for size: a warning once it lasts.
+    var ownRecordUnreadSince: Date?
+    var ownRecordDamaged = false
+    var noticeTooLarge = false
+    /// Each notice as decoded, by path, while its file's stamp holds.
+    var recordCache: [String: (stamp: [Double], record: SupersededRecord)] = [:]
+    /// What the library says of judging (`holdOriginalsInICloud`).
+    var judgment: SupersededJudgment = .judge
     /// SHA-256s this device counts as possibly gone (see the top of this file).
     var possiblyGone: Set<String> = []
     /// Objects the compacting Mac's last pass found due (`runSupersededObjects`), for `deleteSupersededObjects`, with the
     /// journal entries that pass knew (an entry since may name one of them, or a voiceprint).
     var due: [String: SupersededObjectsState.Candidate] = [:]
     var dueJournal: Set<String> = []
+    /// Of those, what the pass applied (the entries of a conversation whose own publication failed weren't).
+    var dueApplied: Set<String> = []
     /// The epoch a new record of waits begins with, in this process.
     var freshEpoch = UUID().uuidString
     /// What each Trash conversation's files said, by path, while its stamp holds (`digestsNamedHere`).
@@ -223,10 +255,14 @@ extension LibrarySyncEngine {
     /// before it goes: time for an edit or presence written anywhere just before to reach iCloud and be seen.
     static let supersededWait: TimeInterval = 24 * 60 * 60
     /// A wall clock that disagrees with the continuous clock by more than this since the last check jumped: every wait
-    /// starts again. So does a restart, and a gap of more than `supersededCheckGap` between checks (asleep, off, or not
-    /// checking): a day is a day watched.
+    /// starts again, as on a restart. A gap of more than `supersededCheckGap` between checks (asleep, off, or not checking)
+    /// isn't counted as watched, and every device must be seen again after it: a day is a day watched.
     static let supersededClockTolerance: TimeInterval = 60 * 60
     static let supersededCheckGap: TimeInterval = 12 * 60 * 60
+    /// At the deletion, every device must have acknowledged on a full pass this Mac saw at most this long ago.
+    static let supersededRecentAck: TimeInterval = 6 * 60 * 60
+    /// Log entries older than this keep only the object and when it went.
+    static let supersededLogDetail: TimeInterval = 90 * 24 * 60 * 60
     /// How far back a device's watermark lists the events it wrote, and how many it carries.
     static let supersededWatermarkWindow: TimeInterval = 2 * 24 * 60 * 60
     static let supersededWatermarkEvents = 200
@@ -243,23 +279,42 @@ extension LibrarySyncEngine {
         supersededRuntime.ownRecordUnread = false
         let directory = remoteRoot.appendingPathComponent(SupersededRecord.directory, isDirectory: true)
         guard (try? SyncFiles.noSymlinks(directory, below: remoteRoot)) != nil else { supersededRuntime.allRecordsRead = false; return }
-        guard fm.fileExists(atPath: directory.path) else { supersededRuntime.records = [:]; supersededRuntime.staleWriters = []; return }
+        guard fm.fileExists(atPath: directory.path) else {
+            supersededRuntime.records = [:]; supersededRuntime.staleWriters = []
+            supersededRuntime.ownRecordUnreadSince = nil; supersededRuntime.ownRecordDamaged = false
+            return
+        }
         guard let urls = try? journalFiles(in: SupersededRecord.directory) else { supersededRuntime.allRecordsRead = false; return }
         let ownName = SupersededRecord.fileName(for: deviceID)
-        var seen = Set<String>()
+        var seen = Set<String>(), ownUnread = false, ownDamaged = false
         for url in urls {
-            let size = ((try? fm.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
-            guard size <= SupersededRecord.maximumBytes, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
-                  let record = SupersededRecord.decode(bytes), url.lastPathComponent == SupersededRecord.fileName(for: record.deviceID) else {
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let size = values?.fileSize ?? 0
+            let stamp = [values?.contentModificationDate?.timeIntervalSince1970 ?? -1, Double(size)]
+            if SyncFiles.itemState(url) == .local, stamp[0] >= 0, let cached = supersededRuntime.recordCache[url.path], cached.stamp == stamp {
+                supersededRuntime.records[cached.record.deviceID] = cached.record
+                seen.insert(cached.record.deviceID)
+                continue
+            }
+            let bytes = size <= SupersededRecord.maximumBytes ? try? SyncFiles.read(url, below: remoteRoot, cloud: cloud) : nil
+            guard let bytes, let record = SupersededRecord.decode(bytes), url.lastPathComponent == SupersededRecord.fileName(for: record.deviceID) else {
                 supersededRuntime.allRecordsRead = false
-                if url.lastPathComponent == ownName { supersededRuntime.ownRecordUnread = true }
+                if url.lastPathComponent == ownName {
+                    ownUnread = true
+                    // Read, or too large to: not a download still on its way.
+                    ownDamaged = bytes != nil || size > SupersededRecord.maximumBytes
+                }
                 if let known = supersededRuntime.records.first(where: { SupersededRecord.fileName(for: $0.key) == url.lastPathComponent }) { seen.insert(known.key) }
                 continue
             }
             supersededRuntime.records[record.deviceID] = record
+            supersededRuntime.recordCache[url.path] = (stamp, record)
             seen.insert(record.deviceID)
         }
         supersededRuntime.records = supersededRuntime.records.filter { seen.contains($0.key) }
+        supersededRuntime.ownRecordUnread = ownUnread
+        supersededRuntime.ownRecordDamaged = ownDamaged
+        supersededRuntime.ownRecordUnreadSince = ownUnread ? (supersededRuntime.ownRecordUnreadSince ?? compactionClock()) : nil
         // Who wrote them: presence that can't be read says nothing, and every notice counts meanwhile. An earlier identity
         // of a reinstalled Mac never deletes again.
         if supersededRuntime.records.keys.contains(where: { $0 != deviceID }), let presence = allPresence(now: now, includingRetired: true) {
@@ -363,24 +418,50 @@ extension LibrarySyncEngine {
     /// This device's acknowledgements of other Macs' notices that count, for its presence: through each one's sequence in
     /// its epoch, holding what this library still names of what it lists or of what's possibly gone, and the entries this
     /// device wrote lately. Nothing while what it names can't be told.
-    func noteSupersededAcks(_ meetings: [Meeting], now: Date = Date()) {
+    func noteSupersededAcks(_ meetings: [Meeting], now: Date = Date(), at stamp: Date = Date()) {
+        // A notice that lists nothing is acknowledged too: what this device holds keeps its writer from listing it again.
         let notices = liveNotices
         guard !notices.isEmpty, let named = digestsNamedHere(meetings) else {
-            supersededRuntime.acks = nil; supersededRuntime.written = nil; return
+            supersededRuntime.acks = nil; supersededRuntime.written = nil; supersededRuntime.acksAt = nil; return
         }
-        supersededRuntime.acks = notices.map { record in
-            let watched = Set(record.objects.map(\.sha256)).union(supersededRuntime.possiblyGone)
-            let holds = named.intersection(watched).sorted()
-            guard holds.count <= Self.supersededHoldsLimit else {
-                return SupersededAck(device: record.deviceID, epoch: record.epoch, through: record.sequence, holds: [], holdsAll: true)
-            }
-            return SupersededAck(device: record.deviceID, epoch: record.epoch, through: record.sequence, holds: holds)
+        let holds = notices.map { record in named.intersection(Set(record.objects.map(\.sha256)).union(supersededRuntime.possiblyGone)).sorted() }
+        // Held by name up to a limit across every acknowledgement; beyond it, everything is held.
+        let holdsAll = holds.reduce(0) { $0 + $1.count } > Self.supersededHoldsLimit
+        let acks = zip(notices, holds).map { record, held in
+            holdsAll ? SupersededAck(device: record.deviceID, epoch: record.epoch, through: record.sequence, holds: [], holdsAll: true)
+                : SupersededAck(device: record.deviceID, epoch: record.epoch, through: record.sequence, holds: held)
         }
+        let written = supersededWatermark(now: now)
+        // Advanced only here, on a full pass: when what it says changed, or every so often, so a write of presence between
+        // full passes (a timer, a settings-only pass) never passes for one.
+        if acks != supersededRuntime.acks || written != supersededRuntime.written || supersededRuntime.acksAt == nil
+            || abs(stamp.timeIntervalSince(supersededRuntime.acksAt!)) >= presenceRefreshInterval {
+            supersededRuntime.acksAt = stamp
+        }
+        supersededRuntime.acks = acks
+        supersededRuntime.written = written
+    }
+
+    /// This device's watermark as it stands (`SupersededWatermark`), worked out again for every presence write: its newest
+    /// settings version, and the events it wrote in the last two days.
+    func supersededWatermark(now: Date = Date()) -> SupersededWatermark {
         let events = (state.recentWrites ?? []).filter { now.timeIntervalSince($0.at) < Self.supersededWatermarkWindow }.map(\.id)
         let complete = events.count <= Self.supersededWatermarkEvents
-        supersededRuntime.written = SupersededWatermark(settings: state.lastSettingsWrite,
-                                                        events: complete ? events : Array(events.suffix(Self.supersededWatermarkEvents)),
-                                                        complete: complete)
+        return SupersededWatermark(settings: state.lastSettingsWrite,
+                                   events: complete ? events : Array(events.suffix(Self.supersededWatermarkEvents)), complete: complete)
+    }
+
+    /// What a sync pass on the compacting Mac says of its own notice: there but unreadable (damaged, too large, or not
+    /// downloaded for an hour), or too large to write. Nothing is listed or deleted meanwhile.
+    func supersededWarnings(now: Date) -> [String] {
+        if supersededRuntime.ownRecordDamaged || supersededRuntime.ownRecordUnreadSince.map({ now.timeIntervalSince($0) >= 60 * 60 }) == true {
+            return [SyncWarningWords.compose(SyncWarningWords.originalsNoticeStuck, details: supersededRuntime.ownRecordDamaged
+                ? "This Mac’s notice of them in iCloud is damaged or too large to read." : "This Mac’s notice of them in iCloud hasn’t downloaded.")]
+        }
+        if supersededRuntime.noticeTooLarge {
+            return [SyncWarningWords.compose(SyncWarningWords.originalsNoticeStuck, details: "This Mac’s notice of them is too large to write.")]
+        }
+        return []
     }
 
     /// Remembers a journal entry this device wrote, for its watermark: the newest settings version, and the events of the
@@ -475,11 +556,12 @@ extension LibrarySyncEngine {
 
     /// What's remembered here, reconciled with this Mac's own notice as read: in the same epoch, the sequence and the log
     /// come back from it, and a wait the notice doesn't list at the same sequence (a record restored from a backup) starts
-    /// again; in another epoch (the record lost, or restored from elsewhere), a new epoch begins with no wait.
+    /// again; in another epoch (the record lost, or restored from elsewhere), or with no notice where one was written, a
+    /// new epoch begins with no wait.
     func supersededState() -> SupersededObjectsState {
         var state = SupersededObjectsState(epoch: supersededRuntime.freshEpoch)
         if let url = supersededStateURL, let data = try? Data(contentsOf: url),
-           let saved = try? JSONDecoder().decode(SupersededObjectsState.self, from: data), saved.schemaVersion == 3 { state = saved }
+           let saved = try? JSONDecoder().decode(SupersededObjectsState.self, from: data), saved.schemaVersion == 4 { state = saved }
         if let own = supersededRuntime.records[deviceID] {
             if own.epoch == state.epoch {
                 let listed = Dictionary(own.objects.map { ($0.sha256, $0.sequence) }, uniquingKeysWith: { a, _ in a })
@@ -490,6 +572,12 @@ extension LibrarySyncEngine {
             }
             state.sequence = max(state.sequence, own.sequence)
             for deletion in own.deleted where state.deleted[deletion.sha256] == nil { state.deleted[deletion.sha256] = deletion }
+        } else if state.sequence > 0 || !state.deleted.isEmpty {
+            // No notice of its own, though one was written (what's remembered here restored, or moved to a Mac whose iCloud
+            // is still listing): a new epoch, so no acknowledgement of what that notice said counts; the log stays.
+            state.objects = [:]
+            if state.epoch == supersededRuntime.freshEpoch { supersededRuntime.freshEpoch = UUID().uuidString }
+            state.epoch = supersededRuntime.freshEpoch
         }
         return state
     }
@@ -504,9 +592,15 @@ extension LibrarySyncEngine {
     /// does and iCloud has it.
     @discardableResult
     func publishSupersededRecord(_ state: SupersededObjectsState, now: Date) -> Bool {
+        // A deletion's details are kept for 90 days; after that, the object and when it went.
+        let deleted = state.deleted.values.map { deletion -> SupersededRecord.Deletion in
+            var kept = deletion
+            if now.timeIntervalSince(deletion.at) >= Self.supersededLogDetail { kept.tracks = [] }
+            return kept
+        }
         let record = SupersededRecord(deviceID: deviceID, epoch: state.epoch, writtenAt: now, sequence: state.sequence,
                                       objects: state.objects.map { .init(sha256: $0.key, sequence: $0.value.sequence) }.sorted { $0.sha256 < $1.sha256 },
-                                      deleted: state.deleted.values.sorted { $0.sha256 < $1.sha256 })
+                                      deleted: deleted.sorted { $0.sha256 < $1.sha256 })
         let url = ownSupersededRecordURL
         let there = SyncFiles.itemState(url) != .absent
         if there, let known = supersededRuntime.records[deviceID], known.sameContent(as: record) { return uploadedStrictly(url) }
@@ -519,6 +613,13 @@ extension LibrarySyncEngine {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             let bytes = try encoder.encode(record)
+            // Never more than any device reads: the notice stays as it was (nothing new is listed or goes), and the sync
+            // pass says so.
+            supersededRuntime.noticeTooLarge = bytes.count > SupersededRecord.maximumBytes
+            guard !supersededRuntime.noticeTooLarge else {
+                Self.log.error("The notice of superseded originals is too large to write (\(bytes.count, privacy: .public) bytes)")
+                return false
+            }
             try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(bytes, to: $0) }
             supersededRuntime.records[deviceID] = record
         } catch {
@@ -527,11 +628,11 @@ extension LibrarySyncEngine {
         return false
     }
 
-    /// This Mac can't delete now (it isn't the one that compacts, or a guard says nothing may go): its notice lists
-    /// nothing, so nobody waits for it (its log stays). Never over a notice of its own it couldn't read.
+    /// This Mac can't delete now (it isn't the one that compacts, the library is encrypted, or a guard says nothing may
+    /// go): its notice lists nothing, so nobody waits for it (its log stays). Never over a notice of its own it couldn't read.
     func withdrawSupersededNotice(now: Date) {
         supersededRuntime.due = [:]
-        guard sealing == nil, !supersededRuntime.ownRecordUnread, let own = supersededRuntime.records[deviceID], !own.objects.isEmpty else { return }
+        guard !supersededRuntime.ownRecordUnread, let own = supersededRuntime.records[deviceID], !own.objects.isEmpty else { return }
         var state = supersededState()
         state.objects = [:]
         state.sequence += 1
@@ -544,7 +645,8 @@ extension LibrarySyncEngine {
     /// voice profiles hold. Removing is always safe; nothing is added or comes due.
     func trimSupersededNotice(_ input: CompactionInput, others: [SyncDeviceRecord]?, now: Date) {
         supersededRuntime.due = [:]
-        guard sealing == nil, waitingForKey == nil, supersededStateURL != nil, !supersededRuntime.ownRecordUnread,
+        guard sealing == nil, waitingForKey == nil, supersededRuntime.judgment != .stop else { withdrawSupersededNotice(now: now); return }
+        guard supersededStateURL != nil, !supersededRuntime.ownRecordUnread,
               let own = supersededRuntime.records[deviceID], !own.objects.isEmpty else { return }
         var state = supersededState()
         guard let facts = supersededFacts(input.meetings, deleted: input.deleted) else {
@@ -565,20 +667,21 @@ extension LibrarySyncEngine {
         publishSupersededRecord(state, now: now)
     }
 
-    /// The wall clock moved as the continuous clock did since the last check, within an hour, in the same boot, and the
-    /// last check is at most `supersededCheckGap` ago by the continuous clock (which counts sleep): a restart, a jump, or a
-    /// gap starts every wait again.
-    private func supersededClockIsSteady(_ state: SupersededObjectsState, now: Date, clock: SyncClockMark) -> Bool {
-        guard let last = state.lastCheck, let lastClock = state.lastClock else { return true }
-        guard let elapsed = lastClock.elapsed(until: clock), elapsed >= 0, elapsed <= Self.supersededCheckGap else { return false }
-        return abs(now.timeIntervalSince(last) - elapsed) <= Self.supersededClockTolerance
+    /// How this check follows the last, by the continuous clock (which counts sleep): within `supersededCheckGap`, the
+    /// seconds watched; a longer gap (asleep, off, or not checking) isn't counted; a restart, or a wall clock that moved
+    /// more than an hour otherwise, starts every wait again.
+    enum SupersededClockStep: Equatable { case watched(TimeInterval), gap, restart }
+
+    private func supersededClockStep(_ state: SupersededObjectsState, now: Date, clock: SyncClockMark) -> SupersededClockStep {
+        guard let last = state.lastCheck, let lastClock = state.lastClock else { return .gap }
+        guard let elapsed = lastClock.elapsed(until: clock), elapsed >= 0,
+              abs(now.timeIntervalSince(last) - elapsed) <= Self.supersededClockTolerance else { return .restart }
+        return elapsed <= Self.supersededCheckGap ? .watched(elapsed) : .gap
     }
 
-    /// A day has passed since `since` by the wall clock, and, in the same boot, by the continuous clock too.
-    private static func supersededWaitPassed(since: Date, clock mark: SyncClockMark, now: Date, clock: SyncClockMark) -> Bool {
-        guard now.timeIntervalSince(since) >= supersededWait else { return false }
-        if let elapsed = mark.elapsed(until: clock) { return elapsed >= supersededWait }
-        return true
+    /// A day has passed since `since` by the wall clock, and a day watched (`SupersededObjectsState.watched`) since `mark`.
+    private static func supersededWaitPassed(since: Date, watched mark: TimeInterval, now: Date, state: SupersededObjectsState) -> Bool {
+        now.timeIntervalSince(since) >= supersededWait && state.watched - mark >= supersededWait
     }
 
     /// The live conversations' recordings held as compressed copies, by the original they replaced, and every SHA-256 a
@@ -618,12 +721,13 @@ extension LibrarySyncEngine {
         return result
     }
 
-    /// Notes each device's presence as this Mac sees it now: a new date it says it was written is a new write, seen now;
-    /// and the app installations writing it.
+    /// Notes each device's presence as this Mac sees it now: a new date it says it last acknowledged (`supersededAt`, which
+    /// only its full passes advance; a presence written in between doesn't count) is a new acknowledgement, seen now; and
+    /// the app installations writing it.
     private func noteParticipants(_ others: [SyncDeviceRecord], in state: inout SupersededObjectsState, now: Date) {
         for record in others {
-            var seen = state.presence[record.deviceID] ?? .init(lastSeen: record.lastSeen, at: now)
-            if seen.lastSeen != record.lastSeen { seen.lastSeen = record.lastSeen; seen.at = now }
+            var seen = state.presence[record.deviceID] ?? .init(supersededAt: record.supersededAt, at: now)
+            if seen.supersededAt != record.supersededAt { seen.supersededAt = record.supersededAt; seen.at = now }
             if let installation = record.appInstallation { seen.installations[installation] = now }
             seen.installations = seen.installations.filter { now.timeIntervalSince($0.value) < Self.recentDevice }
             state.presence[record.deviceID] = seen
@@ -642,15 +746,18 @@ extension LibrarySyncEngine {
         }
     }
 
-    /// Whether every device wrote its presence again a day after the object was acknowledged (seen by this Mac then), and
-    /// every entry its watermark names is applied here (`known`).
+    /// Whether every device acknowledged again on a full pass a day after the object was acknowledged, which this Mac
+    /// saw in the last six hours, and after the last gap in its checks (not on the first check after it, either), and every
+    /// entry its watermark names is applied here (`applied`).
     private func supersededCaughtUp(_ candidate: SupersededObjectsState.Candidate, others: [SyncDeviceRecord], state: SupersededObjectsState,
-                                    known: Set<String>) -> Bool {
+                                    applied: Set<String>, now: Date) -> Bool {
         guard let acknowledged = candidate.acknowledgedSince else { return false }
+        if let woke = state.wokeAt, woke >= now { return false }
         return others.allSatisfy { record in
-            guard let seen = state.presence[record.deviceID], seen.at >= acknowledged.addingTimeInterval(Self.supersededWait),
+            guard let seen = state.presence[record.deviceID], seen.at <= now, seen.at >= acknowledged.addingTimeInterval(Self.supersededWait),
+                  now.timeIntervalSince(seen.at) <= Self.supersededRecentAck, state.wokeAt.map({ seen.at > $0 }) ?? true,
                   let written = record.written, written.complete else { return false }
-            return (written.events + [written.settings].compactMap { $0 }).allSatisfy(known.contains)
+            return (written.events + [written.settings].compactMap { $0 }).allSatisfy(applied.contains)
         }
     }
 
@@ -670,24 +777,32 @@ extension LibrarySyncEngine {
     /// after the replacement); no track here, the Trash included, names it as its file (and every conversation here can
     /// be read); no device holds it; every live recording whose original it is has its copy in iCloud, uploaded, and here
     /// verified, in a conversation the library judged and whose originals voice profiles don't hold
-    /// (`holdOriginalsInICloud`); and its object is there. Nothing is judged in a pass that brought new settings, nor an
-    /// original of a conversation the pass changed: a wait already begun goes on, but nothing comes due then. Due means
-    /// free, with the stamp it had when it became free, for a day, acknowledged by every device for a day, every device
-    /// having written its presence again since, with what it wrote applied, all by a clock that didn't jump or stop.
+    /// (`holdOriginalsInICloud`); and its object is there. Nothing is listed where the library says to stop (Never, or
+    /// settings this version can't read) or the library is encrypted. Nothing is judged in a pass that brought new
+    /// settings, or while the library's settings aren't current: a wait already begun goes on, but nothing comes due then.
+    /// An original of a conversation the pass changed, or couldn't bring up to date, starts its wait again. Due means free,
+    /// with the stamp it had when it became free, for a day, acknowledged by every device for a day, both by the wall
+    /// clock and watched (a gap in the checks isn't counted), every device having acknowledged again since on a full pass
+    /// seen in the last six hours and after the last gap, with what it wrote applied.
     func runSupersededObjects(_ input: CompactionInput, others recent: [SyncDeviceRecord], now: Date) {
         supersededRuntime.due = [:]
-        guard sealing == nil, waitingForKey == nil, supersededStateURL != nil else { return }
+        guard sealing == nil, waitingForKey == nil, supersededRuntime.judgment != .stop else { withdrawSupersededNotice(now: now); return }
+        guard supersededStateURL != nil else { return }
         // Never over a notice of its own this Mac couldn't read: what it says (the epoch, the sequence, the log) would be lost.
         guard !supersededRuntime.ownRecordUnread else { return }
         guard let others = supersededParticipants(recent, now: now) else { trimSupersededNotice(input, others: recent, now: now); return }
         var state = supersededState()
         let before = state
         let clock = continuousClock()
-        let steady = supersededClockIsSteady(state, now: now, clock: clock)
+        let step = supersededClockStep(state, now: now, clock: clock)
+        if case .watched(let seconds) = step { state.watched += seconds } else { state.wokeAt = now }
         state.lastCheck = now; state.lastClock = clock
         noteParticipants(others, in: &state, now: now)
         var free: [String: (copies: [String], stamp: VerifiedAsset)] = [:]
-        var unjudged = Set<String>()
+        // What the pass can't judge (the library's word on voice profiles was given before it, without what it brought),
+        // and what starts its wait again.
+        var unjudged = Set<String>(), restarted = Set<String>()
+        let paused = input.settingsChanged || supersededRuntime.judgment == .pause
         if everyRecentDeviceReadsNotices(others),
            compactionRuntime.records.values.filter(\.record.isCommit).allSatisfy({ uploadedStrictly($0.url) }),
            let facts = supersededFacts(input.meetings, deleted: input.deleted) {
@@ -699,10 +814,10 @@ extension LibrarySyncEngine {
             let holdsAll = acks.contains { $0.holdsAll == true }, heldElsewhere = Set(acks.flatMap(\.holds))
             let voice = originalsHeldForVoice
             for (original, tracks) in facts.byOriginal {
-                // The library's word on voice profiles was given before the pass: what new settings, or a change to the
-                // conversation, brought in it isn't in it.
-                if input.settingsChanged || tracks.contains(where: { input.changed.contains($0.meetingID) }) {
-                    unjudged.insert(original)
+                if paused { unjudged.insert(original); continue }
+                // A name given in it, say, isn't a voiceprint until the library has seen it.
+                if tracks.contains(where: { input.changed.contains($0.meetingID) || input.unapplied.contains($0.meetingID) }) {
+                    restarted.insert(original)
                     continue
                 }
                 guard !named.contains(original), !facts.held.contains(original), !holdsAll, !heldElsewhere.contains(original),
@@ -712,37 +827,36 @@ extension LibrarySyncEngine {
             }
         }
         // What isn't free any more forgets its wait; what's new is listed in the notice at a new sequence. What the pass
-        // couldn't judge stays as it was.
-        let kept = Set(state.objects.keys).intersection(unjudged)
+        // couldn't judge stays as it was; what starts again stays listed.
+        let kept = Set(state.objects.keys).intersection(unjudged.union(restarted))
         let added = Set(free.keys).subtracting(state.objects.keys), removed = Set(state.objects.keys).subtracting(free.keys).subtracting(kept)
         if !added.isEmpty || !removed.isEmpty { state.sequence += 1 }
         for key in removed { state.objects[key] = nil }
+        let watched = state.watched
+        func startAgain(_ original: String) {
+            state.objects[original]?.since = now; state.objects[original]?.sinceWatched = watched
+            state.objects[original]?.acknowledgedSince = nil; state.objects[original]?.acknowledgedWatched = nil
+        }
         for (original, found) in free {
-            if var known = state.objects[original] {
+            if let known = state.objects[original] {
                 // A copy that changed, an object written again since (someone's upload), or a clock that jumped: it starts again.
-                if known.copies != found.copies || known.stamp != found.stamp || known.since > now || !steady {
-                    known.copies = found.copies; known.stamp = found.stamp; known.since = now; known.clock = clock
-                    known.acknowledgedSince = nil; known.acknowledgedClock = nil
-                    state.objects[original] = known
+                if known.copies != found.copies || known.stamp != found.stamp || known.since > now || step == .restart {
+                    state.objects[original]?.copies = found.copies; state.objects[original]?.stamp = found.stamp
+                    startAgain(original)
                 }
             } else {
-                state.objects[original] = .init(copies: found.copies, since: now, clock: clock, stamp: found.stamp, sequence: state.sequence)
+                state.objects[original] = .init(copies: found.copies, since: now, sinceWatched: watched, stamp: found.stamp, sequence: state.sequence)
             }
         }
-        if !steady {
-            for original in kept {
-                state.objects[original]?.since = now; state.objects[original]?.clock = clock
-                state.objects[original]?.acknowledgedSince = nil; state.objects[original]?.acknowledgedClock = nil
-            }
-        }
+        for original in kept where restarted.contains(original) || step == .restart { startAgain(original) }
         let noticed = publishSupersededRecord(state, now: now)
         for (original, var candidate) in state.objects {
             if noticed, supersededAcknowledged(original, sequence: candidate.sequence, others: others, state: state) {
-                if candidate.acknowledgedSince == nil || candidate.acknowledgedSince! > now || !steady {
-                    candidate.acknowledgedSince = now; candidate.acknowledgedClock = clock
+                if candidate.acknowledgedSince == nil || candidate.acknowledgedSince! > now {
+                    candidate.acknowledgedSince = now; candidate.acknowledgedWatched = watched
                 }
             } else {
-                candidate.acknowledgedSince = nil; candidate.acknowledgedClock = nil
+                candidate.acknowledgedSince = nil; candidate.acknowledgedWatched = nil
             }
             state.objects[original] = candidate
         }
@@ -752,22 +866,26 @@ extension LibrarySyncEngine {
                 return
             }
         }
+        // What the pass read, and of that what it applied (a conversation whose own change couldn't be published wasn't).
         let known = Set(input.events.keys).union(input.metadata.keys).union(compactionRuntime.prunedIDs)
+        let applied = known.subtracting(input.events.filter { input.unapplied.contains($0.value.meetingID) }.keys)
         for (original, candidate) in state.objects where !unjudged.contains(original) {
-            guard let acknowledged = candidate.acknowledgedSince, let mark = candidate.acknowledgedClock,
-                  Self.supersededWaitPassed(since: candidate.since, clock: candidate.clock, now: now, clock: clock),
-                  Self.supersededWaitPassed(since: acknowledged, clock: mark, now: now, clock: clock),
-                  supersededCaughtUp(candidate, others: others, state: state, known: known) else { continue }
+            guard let acknowledged = candidate.acknowledgedSince, let mark = candidate.acknowledgedWatched,
+                  Self.supersededWaitPassed(since: candidate.since, watched: candidate.sinceWatched, now: now, state: state),
+                  Self.supersededWaitPassed(since: acknowledged, watched: mark, now: now, state: state),
+                  supersededCaughtUp(candidate, others: others, state: state, applied: applied, now: now) else { continue }
             supersededRuntime.due[original] = candidate
         }
         supersededRuntime.dueJournal = known
+        supersededRuntime.dueApplied = applied
     }
 
     /// The one place a superseded original's object is deleted from iCloud: after a pass found it due
     /// (`runSupersededObjects`) and was applied and acknowledged, under the library's lock, with nothing awaited from
-    /// here to the deletion. Everything is asked again: no journal entry, event or settings version, arrived since that
-    /// pass read it; every device seen lately still knows notices, acknowledges the object without holding it, and has
-    /// applied here what it says it wrote; the library's conversations as they are now (`meetings`) still hold every
+    /// here to the deletion. Everything is asked again: this is still the Mac that compacts a plaintext library and may
+    /// delete; no journal entry, event or settings version, arrived since that pass read it; every device seen lately
+    /// still knows notices, acknowledges the object without holding it, acknowledged again on a full pass seen in the last
+    /// six hours, and has applied here what it says it wrote; the library's conversations as they are now (`meetings`) still hold every
     /// recording whose original it is as a copy that stands (in iCloud, uploaded, here verified), the same copies as when
     /// its wait began, none in a conversation voice profiles hold (`heldForVoice`,
     /// `LibraryController.meetingsHoldingOriginalsInICloud`), and no track here, the Trash included, names it; and,
@@ -777,7 +895,7 @@ extension LibrarySyncEngine {
     public func deleteSupersededObjects(meetings: [Meeting], heldForVoice: Set<UUID>) {
         let due = supersededRuntime.due
         supersededRuntime.due = [:]
-        guard !due.isEmpty, sealing == nil, waitingForKey == nil, supersededStateURL != nil, !supersededRuntime.ownRecordUnread else { return }
+        guard !due.isEmpty, mayDeleteSupersededObjects, supersededStateURL != nil, !supersededRuntime.ownRecordUnread else { return }
         let now = compactionClock()
         var report = compactionReport ?? CompactionReport()
         report.deletedSuperseded = 0; report.deletedSupersededBytes = 0
@@ -787,7 +905,9 @@ extension LibrarySyncEngine {
             guard let listed = try? journalFiles(in: directory),
                   listed.allSatisfy({ supersededRuntime.dueJournal.contains($0.deletingPathExtension().lastPathComponent) }) else { return }
         }
-        guard let recent = recentPresence(now: now), let others = supersededParticipants(recent, now: now), everyRecentDeviceReadsNotices(others),
+        let earlier = Set(((try? knownDevices(now: now)) ?? []).filter { $0.supersededBy != nil }.map(\.id))
+        guard let recent = recentPresence(now: now), compactsHere(recent, superseded: earlier),
+              let others = supersededParticipants(recent, now: now), everyRecentDeviceReadsNotices(others),
               let facts = supersededFacts(meetings, deleted: []) else { return }
         var state = supersededState()
         noteParticipants(others, in: &state, now: now)
@@ -795,7 +915,7 @@ extension LibrarySyncEngine {
         for (original, candidate) in due.sorted(by: { $0.key < $1.key }) {
             guard let known = state.objects[original], known.stamp == candidate.stamp, known.copies == candidate.copies,
                   supersededAcknowledged(original, sequence: known.sequence, others: others, state: state),
-                  supersededCaughtUp(known, others: others, state: state, known: supersededRuntime.dueJournal),
+                  supersededCaughtUp(known, others: others, state: state, applied: supersededRuntime.dueApplied, now: now),
                   let tracks = facts.byOriginal[original], !tracks.isEmpty, !facts.held.contains(original),
                   Set(tracks.map(\.copy)).sorted() == known.copies,
                   tracks.allSatisfy({ !heldForVoice.contains($0.meetingID) }), tracks.allSatisfy(copyStands) else { continue }

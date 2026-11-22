@@ -14,9 +14,11 @@ public enum SyncWarningWords {
     public static let keptBothRecordings = "A recording here differed from its copy in iCloud, so both are kept"
     /// A replaced recording's original, deleted from iCloud, that a conversation names again (LibrarySyncSuperseded.swift).
     public static let deletedOriginalNeeded = "A recording’s original was deleted from iCloud and is needed again"
+    /// The compacting Mac's notice of superseded originals can't be read or written: nothing more leaves iCloud.
+    public static let originalsNoticeStuck = "Replaced recordings’ originals can’t be removed from iCloud for now"
 
     static let heads = [unreadHistory, unsavedChange, unappliedConversation, undownloadedHistory, damagedHistory, keptBothRecordings,
-                        deletedOriginalNeeded]
+                        deletedOriginalNeeded, originalsNoticeStuck]
 
     /// "<head>: <the system's words>", or the error alone when it's one of Daybook's plain sentences.
     public static func compose(_ head: String, _ error: Error) -> String {

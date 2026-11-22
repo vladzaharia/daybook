@@ -251,10 +251,24 @@ extension LibraryController {
     /// isn't confirmed in iCloud (`voiceSourcesConfirmedInCloud`) learned from, followed as `voiceProtectedMeetings` is,
     /// the Trash included. What the sealer keeps through key rotations (`LibrarySyncEngine.holdOriginalsInICloud`) and
     /// what cleaning superseded originals out of iCloud leaves alone (docs/icloud-sync.md, "Voice clips").
-    public func meetingsHoldingOriginalsInICloud() async -> Set<UUID> {
+    /// Nil when a conversation in the Trash can't be read: a voiceprint may have followed a recording through it.
+    public func meetingsHoldingOriginalsInICloud() async -> Set<UUID>? {
         // The Trash is read only when a voiceprint holds a recording back at all.
         guard await !voiceProtectedMeetings(lineage: [], requiringUpload: true).mark.holding.isEmpty else { return [] }
-        return await voiceProtectedMeetings(lineage: await trashedMeetings(), requiringUpload: true).meetings
+        let root = rootURL
+        guard let trashed = await Task.detached(priority: .userInitiated, operation: { Self.readableTrash(in: root) }).value else { return nil }
+        return await voiceProtectedMeetings(lineage: trashed, requiringUpload: true).meetings
+    }
+
+    /// What the library says of letting superseded originals go from iCloud (`SupersededJudgment`): stop under Never, or
+    /// while a setting or voiceprint is in a shape this version can't read (which conversation a voiceprint was learned
+    /// from can't be known), as a compression pass does; pause while its settings aren't the library's as sync last
+    /// delivered them whole (`settingsCurrent`).
+    func supersededJudgment(settingsCurrent: Bool) -> SupersededJudgment {
+        if newerSettingsSkipped || metadata.recordingCompression == .never || metadata.hasUnreadableValues || VoiceClips.counting(metadata) == nil {
+            return .stop
+        }
+        return settingsCurrent ? .judge : .pause
     }
 
     /// Nothing voice protection depends on changed since `mark` was taken.

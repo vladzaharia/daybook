@@ -130,6 +130,8 @@ struct CompactionInput {
     var meetings: [Meeting] = []
     var settingsChanged = false
     var changed: Set<UUID> = []
+    /// Conversations whose remote changes the pass didn't apply (this device's own change to it couldn't be published).
+    var unapplied: Set<UUID> = []
 }
 
 extension LibrarySyncEngine {
@@ -252,6 +254,15 @@ extension LibrarySyncEngine {
 
     // MARK: Compacting
 
+    /// This is the Mac to compact: of the Macs seen lately that hold the library's key, earlier identities of reinstalled
+    /// devices (`superseded`) aside, its device ID is the least.
+    func compactsHere(_ recent: [SyncDeviceRecord], superseded: Set<String>) -> Bool {
+        let candidates = recent.filter { record in
+            record.deviceClass == .mac && sealing.map { record.key == SyncDeviceKeyState(state: .ready, id: $0.current.idHex) } ?? true
+        }
+        return (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() == deviceID
+    }
+
     /// One run of compaction, at the end of a pass, on the compacting Mac. Best effort: what fails is tried again later.
     func runCompaction(_ input: CompactionInput, now: Date) {
         // Superseded originals' objects (LibrarySyncSuperseded.swift): a Mac that can't compact lists none, and a pass
@@ -262,15 +273,10 @@ extension LibrarySyncEngine {
         let recent = recentPresence(now: now)
         // Every device seen lately reads a compacted library, and this is the Mac to compact it.
         if let recent, !recent.allSatisfy({ ($0.features ?? []).contains(Self.compactionFeature) }) { withdrawSupersededNotice(now: now); return }
-        let candidates = (recent ?? []).filter { record in
-            record.deviceClass == .mac && sealing.map { record.key == SyncDeviceKeyState(state: .ready, id: $0.current.idHex) } ?? true
-        }
         // An earlier identity of a reinstalled device never syncs again: it isn't the one to compact. (It still has to
         // acknowledge: a device with the same name that's merely away may come back.)
         let superseded = Set(((try? knownDevices(now: now)) ?? []).filter { $0.supersededBy != nil }.map(\.id))
-        if recent != nil, (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() != deviceID {
-            withdrawSupersededNotice(now: now); return
-        }
+        if let recent, !compactsHere(recent, superseded: superseded) { withdrawSupersededNotice(now: now); return }
         guard let others = recent, input.complete, compactionRuntime.readComplete, journalCache.unreadable.isEmpty else {
             trimSupersededNotice(input, others: recent, now: now); return
         }

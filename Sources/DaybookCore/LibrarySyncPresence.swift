@@ -50,6 +50,9 @@ struct SyncDeviceRecord: Codable, Equatable {
     var superseded: [SupersededAck]?
     /// The journal entries it wrote lately, beside those acknowledgements (`SupersededWatermark`). Additive.
     var written: SupersededWatermark?
+    /// When it last worked out those acknowledgements, on a full pass: a presence written in between (a timer, a pass of
+    /// settings alone) carries the same date, so it never passes for a new acknowledgement. Additive.
+    var supersededAt: Date?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -60,6 +63,7 @@ struct SyncDeviceRecord: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
         case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem, superseded, written
+        case supersededAt
     }
 
     init(from decoder: Decoder) throws {
@@ -86,6 +90,7 @@ struct SyncDeviceRecord: Codable, Equatable {
         problem = (try? values.decodeIfPresent(SyncPresenceProblem.self, forKey: .problem)) ?? nil
         superseded = (try? values.decodeIfPresent([SupersededAck].self, forKey: .superseded)) ?? nil
         written = (try? values.decodeIfPresent(SupersededWatermark.self, forKey: .written)) ?? nil
+        supersededAt = (try? values.decodeIfPresent(Date.self, forKey: .supersededAt)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -170,8 +175,10 @@ extension LibrarySyncEngine {
         record.appInstallation = appInstallation
         record.pendingUploads = presenceUploads
         record.problem = presenceProblem ?? (presenceStorageFull ? .storageFull : nil)
+        // Acknowledgements as of the last full pass; the watermark as it stands now.
         record.superseded = supersededRuntime.acks
-        record.written = supersededRuntime.acks == nil ? nil : supersededRuntime.written
+        record.written = supersededRuntime.acks == nil ? nil : supersededWatermark()
+        record.supersededAt = supersededRuntime.acks == nil ? nil : supersededRuntime.acksAt
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
@@ -212,7 +219,17 @@ extension LibrarySyncEngine {
             written.sealed = SealedObject.seal(inner, kind: .presence, key: sealing.current).bytes.base64EncodedString()
             written.displayName = ""; written.activity = nil
         }
-        let bytes = try SyncPresenceFiles.encode(written)
+        var bytes = try SyncPresenceFiles.encode(written)
+        // Never larger than any device reads: what acknowledgements can't carry is held instead, and then said not at all.
+        if bytes.count > SyncPresenceFiles.maximumBytes, let acks = written.superseded {
+            written.superseded = acks.map { SupersededAck(device: $0.device, epoch: $0.epoch, through: $0.through, holds: [], holdsAll: true) }
+            written.written = SupersededWatermark(settings: written.written?.settings, events: [], complete: false)
+            bytes = try SyncPresenceFiles.encode(written)
+            if bytes.count > SyncPresenceFiles.maximumBytes {
+                written.superseded = nil; written.written = nil; written.supersededAt = nil
+                bytes = try SyncPresenceFiles.encode(written)
+            }
+        }
         try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(bytes, to: $0) }
         presenceWritten = (record, now)
     }

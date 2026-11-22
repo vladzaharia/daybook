@@ -1087,7 +1087,7 @@ final class VoiceClipLibraryTests: XCTestCase {
         confirmed = await library.voiceSourcesConfirmedInCloud()
         XCTAssertEqual(confirmed, [], "the clip accepted here isn't in iCloud yet")
         let holding = await library.meetingsHoldingOriginalsInICloud()
-        XCTAssertTrue(holding.contains(id), "and so its originals stay (the copy holding the same bytes too)")
+        XCTAssertEqual(holding?.contains(id), true, "and so its originals stay (the copy holding the same bytes too)")
         await pass(library)
         confirmed = await library.voiceSourcesConfirmedInCloud()
         XCTAssertEqual(confirmed, [key(id, track)])
