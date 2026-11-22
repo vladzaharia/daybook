@@ -67,7 +67,7 @@ Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
 | `DaybookPhone/Recording` | `PhoneRecorder` and its parts: audio session, inputs (microphone and synthetic), the AAC segment writer, the crash journal, the assembler that joins segments |
 | `DaybookPhone/Recording` (UI) | `RecordingSurface` in the pocket, notebook, and table postures, `RecordStartButton`, recording-only tokens (`RecordingStyle`) |
 | `DaybookPhone/Library` | `PhoneLibrary` (DaybookKit's `LibraryController`, filing, imports), `SyncAudioProvider` (audio on demand), `CloudAvailability` |
-| `DaybookPhone/Link` | `PhoneLink`, the DaybookLink client: pairing, connections, live progress, record control; Settings › Macs and pairing |
+| `DaybookPhone/Link` | `PhoneLink`, the DaybookLink client: pairing, connections, live progress, record control; Settings › Devices and pairing |
 | `DaybookPhone/Devices` | `PhoneDevices`, DaybookDevices on iPhone (Soundcore with background Bluetooth and state restoration), the recorder handoff (`handoff`, DaybookKit's `RecorderHandoff`); recorder screens and `RecorderHandoffCard` |
 | `DaybookPhone/Status` | The standing status sheet: the system's sheet over the one-column library, `StatusSheetFoot` at the library page's foot on two pages and on its side, and a card on the right page for more; `StatusSheetModel` (where it stands, its sizes, where a line leads; tested) and `StatusSheet` (the views) |
 | `DaybookPhone/Settings` | `SettingsScreen`: iCloud, Macs, recorders, recording, storage, templates, vocabulary, About |

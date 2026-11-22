@@ -7,32 +7,8 @@ import UniformTypeIdentifiers
 
 // A recorder's screens on the iPhone are the ones the Mac shows (DaybookUI's `Devices`): its page, its recordings,
 // Listen Live, its handoff, and adding one, in the same words. What's here is how the iPhone hosts them: Settings'
-// Recorders section, the pushes from the page, Add Recorder's sheet and the open Duo's pages, and the services
+// Devices section, the pushes from the page, Add Recorder's sheet and the open Duo's pages, and the services
 // they reach the app through (`PhoneRecorderServices`).
-
-// MARK: Settings › Recorders
-
-struct RecordersSection: View {
-    @Environment(PhoneAppModel.self) private var model
-    @Environment(\.settingsPages) private var pages
-    @Binding var showingAddDevice: Bool
-
-    var body: some View {
-        Section {
-            ForEach(model.devices.sessions) { session in
-                SettingsLink(route: .device(session.id)) { DeviceRow(session: session) }
-            }
-            // Open, Add Recorder is the right page's; in the hand, a sheet.
-            if pages != nil {
-                SettingsLink(route: .addRecorder) { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
-            } else {
-                Button { showingAddDevice = true } label: { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
-            }
-        } header: {
-            Text("Recorders")
-        }
-    }
-}
 
 /// A recorder in Settings: its tile (teal while it's connected), its name, and its status line as both apps word
 /// it ("Connected · 80% · 2 new", "Importing 1 of 3", "Managed by Studio Mac").

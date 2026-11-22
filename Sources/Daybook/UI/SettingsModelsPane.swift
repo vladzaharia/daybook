@@ -43,6 +43,9 @@ struct ModelSettings: View {
     @Bindable var state: AppState
     @State private var slot = ModelManagerSlot()
     @State private var path: [ModelsPage] = []
+    /// Pages Back stepped away from, nearest last, for Forward.
+    @State private var ahead: [ModelsPage] = []
+    @State private var goingForward = false
     /// Where Model Library scrolls to when it opens (`--model-demo`).
     @State private var libraryAnchor: ModelSettingsAnchor?
     @State private var showingVoiceMatching = false
@@ -58,6 +61,14 @@ struct ModelSettings: View {
 
     private var manager: ModelManager { slot.manager(for: state) }
 
+    private var backAction: (() -> Void)? {
+        path.isEmpty ? nil : { ahead.append(path.removeLast()) }
+    }
+
+    private var forwardAction: (() -> Void)? {
+        ahead.isEmpty ? nil : { goingForward = true; path.append(ahead.removeLast()) }
+    }
+
     /// Why removing waits.
     static let busyHelp = "Available when downloads and processing finish"
 
@@ -65,6 +76,7 @@ struct ModelSettings: View {
         NavigationStack(path: $path) {
             ModelsOverview(state: state, manager: manager)
                 .navigationTitle("Models")
+                .toolbar { SettingsNavigationButtons(back: nil, forward: forwardAction) }
                 .navigationDestination(for: ModelsPage.self) { page in
                     Group {
                         switch page {
@@ -77,7 +89,14 @@ struct ModelSettings: View {
                         }
                     }
                     .navigationTitle(page.title)
+                    .navigationBarBackButtonHidden(true)
+                    .toolbar { SettingsNavigationButtons(back: backAction, forward: forwardAction) }
                 }
+        }
+        .onChange(of: path) { old, new in
+            // A page opened from a row ends the way forward; Forward itself doesn't.
+            if new.count > old.count, !goingForward { ahead = [] }
+            goingForward = false
         }
         .task {
             await manager.refresh()

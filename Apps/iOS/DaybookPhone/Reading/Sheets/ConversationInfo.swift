@@ -69,6 +69,7 @@ struct ConversationInfo: View {
             actionContext: { meeting in Self.context(meeting, placement: placement) },
             now: { meeting, date in
                 var inputs = ConversationStatusPresentation.Inputs(words: words, local: .iPhone())
+                inputs.cancelsStarted = PhoneProcessor.current?.canCancelStarted(meeting, at: date) ?? false
                 if let placement {
                     inputs.placement = .init(planner: placement.planners[meeting.id], run: placement.runs[meeting.id],
                                              cloudOffered: placement.cloudOffer(for: meeting) != nil)
