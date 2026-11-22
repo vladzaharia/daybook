@@ -35,9 +35,9 @@ public struct RecorderDevicePage: View {
                     .padding(.top, DaybookSpacing.s4)
             }
             RecorderHandoffView(session: session, style: .page)
+            RecorderImportProgress(session: session)
             RecorderActionTiles(session: session, hiding: boxActions.contains(.connect) || boxActions.contains(.reconnect) ? [.connect] : [])
             RecorderFigures(session: session)
-            RecorderImportProgress(session: session)
             LiveSavedNotice(session: session)
             if showsRecordings { RecorderNewRecordings(session: session) }
             RecentImportsSection(session: session)
@@ -261,6 +261,7 @@ public struct RecorderProblemBox: View {
                 }
             }
         }
+        .environment(\.attentionBoxSpansColumn, true)
         .daybookTransition(.opacity)
     }
 
@@ -297,6 +298,7 @@ public struct RecorderActionTiles: View {
     private let hiding: Set<RecorderAction>
     @Environment(\.recorderServices) private var services
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.daybookDensity) private var density
 
     /// - Parameter hiding: What another part of the page offers already (Connect, in the problem box).
     public init(session: DeviceSession, hiding: Set<RecorderAction> = []) {
@@ -309,7 +311,10 @@ public struct RecorderActionTiles: View {
         let actions = RecorderActions.available(facts).filter { !hiding.contains($0) }
         if !actions.isEmpty {
             let stacked = typeSize.isAccessibilitySize
-            let layout = stacked ? AnyLayout(VStackLayout(spacing: DaybookSpacing.s2)) : AnyLayout(HStackLayout(spacing: DaybookSpacing.s2))
+            // In a window the tiles keep the figures' columns, so one tile is one figure wide.
+            let layout = stacked ? AnyLayout(VStackLayout(spacing: DaybookSpacing.s2))
+                : density == .touch ? AnyLayout(HStackLayout(spacing: DaybookSpacing.s2))
+                : AnyLayout(RecorderTileColumns(spacing: DaybookSpacing.s2, minimumTile: RecorderFigures.minimumTile))
             layout {
                 ForEach(actions, id: \.self) { action in
                     RecorderActionTile(label: action.label(shortName: session.kind.shortName), stacked: stacked,
@@ -336,6 +341,49 @@ public struct RecorderActionTiles: View {
             live?.startListening()
             services?.showListenLive?(session)
         case .stopListening: live?.stopListening()
+        }
+    }
+}
+
+/// Up to three columns of equal tiles from the leading edge, falling to two and one at the widths `RecorderFigures`
+/// does, so the tiles sit over the figures' columns and an empty column stays empty.
+struct RecorderTileColumns: Layout {
+    let spacing: CGFloat
+    let minimumTile: CGFloat
+
+    static func columns(width: CGFloat, spacing: CGFloat, minimumTile: CGFloat) -> Int {
+        max(1, min(3, Int((width + spacing) / (minimumTile + spacing))))
+    }
+
+    private func columns(_ width: CGFloat) -> Int { Self.columns(width: width, spacing: spacing, minimumTile: minimumTile) }
+
+    private func tileWidth(_ width: CGFloat) -> CGFloat {
+        let count = CGFloat(columns(width))
+        return (width - spacing * (count - 1)) / count
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? minimumTile
+        let proposed = ProposedViewSize(width: tileWidth(width), height: nil)
+        let heights = subviews.map { $0.sizeThatFits(proposed).height }
+        let count = columns(width)
+        let rows = stride(from: 0, to: heights.count, by: count).map { heights[$0..<min($0 + count, heights.count)].max() ?? 0 }
+        return CGSize(width: width, height: rows.reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = tileWidth(bounds.width)
+        let count = columns(bounds.width)
+        let proposed = ProposedViewSize(width: width, height: nil)
+        var y = bounds.minY
+        for start in stride(from: 0, to: subviews.count, by: count) {
+            let row = subviews[start..<min(start + count, subviews.count)]
+            let height = row.map { $0.sizeThatFits(proposed).height }.max() ?? 0
+            for (offset, subview) in row.enumerated() {
+                subview.place(at: CGPoint(x: bounds.minX + CGFloat(offset) * (width + spacing), y: y), anchor: .topLeading,
+                              proposal: ProposedViewSize(width: width, height: height))
+            }
+            y += height + spacing
         }
     }
 }
