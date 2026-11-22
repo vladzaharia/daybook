@@ -1,5 +1,26 @@
 # Validation record
 
+## Superseded originals: waits survive commits and rewrites (2026-11-22, fifth round)
+
+The fourth review's three blockers, on `storage/icloud-cleanup` (docs/icloud-sync.md, "Superseded objects go from
+iCloud"). A pass with a compaction commit not yet uploaded judges nothing: every wait goes on, listed, and nothing comes
+due (it used to drop them all). An acknowledgement starts only with the notice in iCloud and ends only when it stops
+holding (a rewrite for another object used to reset every one), and nothing comes due in a pass whose notice isn't in
+iCloud. A changed conversation's original starts its wait again in a paused pass, or one that brings settings, too.
+
+**Verified.** `SimulatedICloud` can now leave what a pass writes not uploaded until the next (`holdUploads(since:)`), as
+real iCloud does; the tests before read every write as uploaded at once, which hid the first two. `SupersededObjectsTests`
+(70, `SupersededOriginalsLibraryTests` 3): two more originals replaced, compacted, and listed in a day, each commit and
+notice uploaded only by the next pass, with an original already waiting still going on time; nothing coming due while
+a commit, or the notice, isn't uploaded, the wait and its acknowledgement kept; a pass bringing settings and an edit
+together starting the wait again; the notice held from its first write, so no acknowledgement starts. Six mutations
+(`scratchpad/mut/icloud-r5.py`), the three fixes undone and each half of them, each fail a test.
+
+**Follow-ups, not done here** (fourth review): sleep under 12 hours counts as watched and needs no sighting after it;
+the watermark covers two days; a device that joins mid-wait isn't held a day; holding everything stalls silently; the
+watermark isn't crash-safe; the voice hold's Trash read runs on every eager Mac; the epoch rotates on every read while
+the notice is missing.
+
 ## Superseded originals leave iCloud, announced, acknowledged, and caught up (2026-11-22, fourth round)
 
 After a Mac replaces a recording with a compressed copy, the original's object (`Blobs/<previousSHA256>`) goes from

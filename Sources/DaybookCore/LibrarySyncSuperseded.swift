@@ -779,7 +779,8 @@ extension LibrarySyncEngine {
     /// verified, in a conversation the library judged and whose originals voice profiles don't hold
     /// (`holdOriginalsInICloud`); and its object is there. Nothing is listed where the library says to stop (Never, or
     /// settings this version can't read) or the library is encrypted. Nothing is judged in a pass that brought new
-    /// settings, or while the library's settings aren't current: a wait already begun goes on, but nothing comes due then.
+    /// settings, while the library's settings aren't current, or while a compaction commit is still on its way to iCloud: a
+    /// wait already begun goes on, but nothing comes due then. Nor in a pass whose notice isn't in iCloud as it stands.
     /// An original of a conversation the pass changed, or couldn't bring up to date, starts its wait again. Due means free,
     /// with the stamp it had when it became free, for a day, acknowledged by every device for a day, both by the wall
     /// clock and watched (a gap in the checks isn't counted), every device having acknowledged again since on a full pass
@@ -802,10 +803,11 @@ extension LibrarySyncEngine {
         // What the pass can't judge (the library's word on voice profiles was given before it, without what it brought),
         // and what starts its wait again.
         var unjudged = Set<String>(), restarted = Set<String>()
+        // So is a pass with a compaction commit still on its way to iCloud (a device finding an object gone must find what
+        // pruned its history): pruning only frees more, so every wait goes on.
         let paused = input.settingsChanged || supersededRuntime.judgment == .pause
-        if everyRecentDeviceReadsNotices(others),
-           compactionRuntime.records.values.filter(\.record.isCommit).allSatisfy({ uploadedStrictly($0.url) }),
-           let facts = supersededFacts(input.meetings, deleted: input.deleted) {
+            || !compactionRuntime.records.values.filter(\.record.isCommit).allSatisfy({ uploadedStrictly($0.url) })
+        if everyRecentDeviceReadsNotices(others), let facts = supersededFacts(input.meetings, deleted: input.deleted) {
             let pruned = compactionRuntime.prunedIDs
             let named = Set(input.events.filter { !pruned.contains($0.key) }.values.flatMap { $0.assets.map(\.sha256) })
             // What another device holds isn't free either, so its notice no longer lists it and that device may publish
@@ -814,12 +816,12 @@ extension LibrarySyncEngine {
             let holdsAll = acks.contains { $0.holdsAll == true }, heldElsewhere = Set(acks.flatMap(\.holds))
             let voice = originalsHeldForVoice
             for (original, tracks) in facts.byOriginal {
-                if paused { unjudged.insert(original); continue }
-                // A name given in it, say, isn't a voiceprint until the library has seen it.
+                // A name given in it, say, isn't a voiceprint until the library has seen it: it starts again, judged or not.
                 if tracks.contains(where: { input.changed.contains($0.meetingID) || input.unapplied.contains($0.meetingID) }) {
                     restarted.insert(original)
                     continue
                 }
+                if paused { unjudged.insert(original); continue }
                 guard !named.contains(original), !facts.held.contains(original), !holdsAll, !heldElsewhere.contains(original),
                       tracks.allSatisfy({ copy in voice.map { !$0.held.contains(copy.meetingID) && $0.judged.contains(copy.meetingID) } ?? false }),
                       tracks.allSatisfy(copyStands), let stamp = objectStamp(blobURL(original), digest: original) else { continue }
@@ -849,14 +851,15 @@ extension LibrarySyncEngine {
             }
         }
         for original in kept where restarted.contains(original) || step == .restart { startAgain(original) }
+        // An acknowledgement starts only with the notice in iCloud, and ends only when it stops holding (a device
+        // acknowledges a listing only once it has read the notice from iCloud).
         let noticed = publishSupersededRecord(state, now: now)
         for (original, var candidate) in state.objects {
-            if noticed, supersededAcknowledged(original, sequence: candidate.sequence, others: others, state: state) {
-                if candidate.acknowledgedSince == nil || candidate.acknowledgedSince! > now {
-                    candidate.acknowledgedSince = now; candidate.acknowledgedWatched = watched
-                }
-            } else {
+            let starts = candidate.acknowledgedSince == nil || candidate.acknowledgedSince! > now
+            if !supersededAcknowledged(original, sequence: candidate.sequence, others: others, state: state) || (starts && !noticed) {
                 candidate.acknowledgedSince = nil; candidate.acknowledgedWatched = nil
+            } else if starts {
+                candidate.acknowledgedSince = now; candidate.acknowledgedWatched = watched
             }
             state.objects[original] = candidate
         }
@@ -869,7 +872,8 @@ extension LibrarySyncEngine {
         // What the pass read, and of that what it applied (a conversation whose own change couldn't be published wasn't).
         let known = Set(input.events.keys).union(input.metadata.keys).union(compactionRuntime.prunedIDs)
         let applied = known.subtracting(input.events.filter { input.unapplied.contains($0.value.meetingID) }.keys)
-        for (original, candidate) in state.objects where !unjudged.contains(original) {
+        // Nothing comes due in a pass whose notice isn't in iCloud as it stands.
+        for (original, candidate) in state.objects where noticed && !unjudged.contains(original) {
             guard let acknowledged = candidate.acknowledgedSince, let mark = candidate.acknowledgedWatched,
                   Self.supersededWaitPassed(since: candidate.since, watched: candidate.sinceWatched, now: now, state: state),
                   Self.supersededWaitPassed(since: acknowledged, watched: mark, now: now, state: state),
