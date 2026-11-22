@@ -111,6 +111,16 @@ final class SegmentWriter: @unchecked Sendable {
         }
     }
 
+    /// The person marked a moment: kept in the recording, so every segment from now on and its finished report carry it
+    /// to the iPhone (`WatchRecordingInfo.bookmarks`). Saved at once.
+    func bookmark(_ mark: WatchBookmark) -> WatchRecordingJournal {
+        queue.sync {
+            journal.recording.bookmarks = (journal.recording.bookmarks ?? []) + [mark]
+            save()
+            return journal
+        }
+    }
+
     /// The iPhone's receipt: returns the journal, and the segments it asks for again (`WatchRecordingJournal.receive`).
     func receive(_ receipt: WatchReceipt) -> (WatchRecordingJournal, [WatchSegment]) {
         queue.sync {

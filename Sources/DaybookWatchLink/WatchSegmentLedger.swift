@@ -85,7 +85,7 @@ public struct WatchSegmentLedger: Codable, Equatable, Sendable {
 
     /// The more advanced of two reports of one recording: a finished one over one in progress, then the one with more
     /// segments or more audio. Its conversation is whichever either names: a recording adopts one once and keeps it,
-    /// so a report from before it adopted never takes it away.
+    /// so a report from before it adopted never takes it away. Its bookmarks only grow: every mark either carries stays.
     static func later(_ a: WatchRecordingInfo, _ b: WatchRecordingInfo) -> WatchRecordingInfo {
         var merged: WatchRecordingInfo
         if a.isFinished != b.isFinished {
@@ -96,6 +96,8 @@ public struct WatchSegmentLedger: Codable, Equatable, Sendable {
             merged = b.duration >= a.duration ? b : a
         }
         merged.conversationID = merged.conversationID ?? a.conversationID ?? b.conversationID
+        let marks = (a.bookmarks ?? []) + (b.bookmarks ?? []).filter { mark in a.bookmarks?.contains { $0.id == mark.id } != true }
+        merged.bookmarks = marks.isEmpty ? nil : marks.sorted { $0.madeAt < $1.madeAt }
         return merged
     }
 }

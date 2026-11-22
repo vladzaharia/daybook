@@ -53,6 +53,21 @@ public enum WatchWords {
         reason.isEmpty || reason.hasSuffix(".") ? reason : reason + "."
     }
 
+    /// After Stop: what was recorded, held a moment (docs/watch.md, "After Stop").
+    public static func saved(_ seconds: TimeInterval) -> String { "Saved · \(clock(seconds))" }
+    public static let sent = "Sent"
+    public static let bookmark = "Bookmark"
+    public static let keepRecording = "Keep Recording"
+
+    /// The bookmark button's label: the count once there is one ("Bookmark · 2").
+    public static func bookmarkTitle(count: Int) -> String { count > 0 ? "\(bookmark) · \(count)" : bookmark }
+
+    /// Where a recording that just stopped is going: on its way, waiting for the iPhone, or there.
+    public static func afterStopLine(isDelivered: Bool, isReachable: Bool) -> String {
+        if isDelivered { return sent }
+        return isReachable ? "Sending to iPhone…" : "Waiting for iPhone"
+    }
+
     /// The elapsed time, `m:ss` (`h:mm:ss` from an hour).
     public static func clock(_ seconds: TimeInterval) -> String {
         let whole = max(0, Int(seconds))
