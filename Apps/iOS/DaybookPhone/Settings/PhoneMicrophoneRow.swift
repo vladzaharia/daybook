@@ -6,7 +6,7 @@ import SwiftUI
 /// Settings › Recording › Microphone, named as the Mac's pop-up is: the input recordings use (Automatic, or the one the
 /// person chose in the recorder's input picker), and, when the system has refused Daybook the microphone, the way to
 /// the system's Settings where it's given.
-struct MicrophoneSettingsRow: View {
+struct PhoneMicrophoneRow: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase

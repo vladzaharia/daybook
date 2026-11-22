@@ -389,7 +389,7 @@ struct RecordingSettingsScreen: View {
     var body: some View {
         @Bindable var settings = model.settings
         Form {
-            MicrophoneSettingsRow()
+            PhoneMicrophoneRow()
             Section {
                 Toggle("Transcribe Automatically", isOn: $settings.requestsTranscription)
                 Toggle("Recording with Your Mac", isOn: $settings.acceptsMacRecordRequests)
