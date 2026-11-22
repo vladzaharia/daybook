@@ -4832,6 +4832,20 @@ Checked by unit tests: the words for each surface (`SummaryPlacementWordsTests`,
 
 Not checked: Cancel against a live queue beyond the fake-engine tests (`CancelStartedWorkTests`: running own, running with a request, paused own, paused with another device's request, paused with this Mac's request); an iPhone still being told "paused" when a Mac's own job is cancelled; Undo for the chip menu's actions; the iPhone's own work has no Cancel yet; the chip menu on a real Mac; the notices on a real iPhone arrival or launch recovery.
 
+## 2026-11-20: iPhone visual fixes (VIP-01 to VIP-20, minus the four held for the owner)
+
+Rename Speaker is a phone sheet under touch (a bar with Cancel and Rename, the name in a plain field, profile rows with a glyph, top-aligned on paper; the Mac popover is unchanged). Welcome has one geometry on iPhone (an 88 pt hero slot and the title at a fixed height, a reserved Not Now row so the primary never moves, visible cards, Ready's Record as a full primary). The working spinner sits on its words' baseline; Summary | Transcript shows Summary selected with Transcript dimmed before there is a transcript; the selection bar has side padding and at most five items (More holds the rest, Trash last); Heard In is a bar with the glass close, a list, at medium; Models offers one Download per bundle with the chooser's chevron on the trailing edge; the page header no longer jumps between Summary and Transcript; Add Photos opens at medium; Info's pickers are in link ink at both detents and the Audio row's More is a plain ellipsis; Speaker Profiles' empty state, the Pairing sheet's glyph, margins and header, the recorder's title edge, the Trash's top rule, About's lock, and Library › Devices' empty state and demo source.
+
+Checked: simulator pictures on the iPhone 17, light and dark where a colour or fill changed (Welcome, Rename Speaker, Info), beside the originals in the UX pass folder; `swift build`; `scripts/build-ios.sh --test`. Not checked: the iPhone 17e; VIP-11's `.controlSize(.small)` did not narrow the glass segmented switch, so it was left out (folding Info into More is for the owner); VIP-04 keeps the system's switch with the Transcript tap ignored (the system draws the segment normally, not dim); VIP-14's and VIP-20's empty states have no demo scenario that shows them; VoiceOver on the new switch; PR #108's Welcome links (not in main).
+
+## 2026-11-20: Speakers and "Me" (UX pass SPK-02, SPK-03, SPK-05)
+
+Changed: the person is "Me" in live captions (the microphone's lane and turn label, so also "Me: <reason>" in the strip's source status), the name list's mark, and the profile capsule; Settings' Speaker profiles row reads "3 profiles · Me: Vlad" (Mac and iPhone), and Settings search finds Library by "Me", "You", "This Is Me"; Info › People offers This Is Me as a link under the name while the library has no "me" profile (and always under the microphone's "Me"; with nothing to go by it focuses the name field); This Is Me from People, from a profile's menu, and Not Me register Undo ("Undo This Is Me" / "Undo Not Me") that takes back the choice and what it named; a profile's menu says "This Is Me (instead of Vlad)" when another is marked; People says "Speakers off" with Tell speakers apart off (Mac).
+
+Checked: `SpeakerProfileLibraryTests` (undo and redo of This Is Me from a conversation, with and without a me-profile, and of the profile's replacement), `ConversationInfoWordsTests` (the row's words), the caption suites with the new word.
+
+Not checked (no way to click, tap, or press keys here): the People link, the context menu, VoiceOver, and the screens. Left as they were: the transcript's "Me" (already "Me"), the recorder's input meters ("You" and "Call", not a speaker's name), "Pause on Soundcore"-style reason strings, and "No speakers yet" on the iPhone, which always finds speakers. Not done: the name list stays as it was (it opens on focus and scrolls; the owner wants it as a combobox). Identify Speakers beside "Speakers off" (with Tell speakers apart off that mode finds nothing, so it needs the setting turned on first), and renaming "Me" does not set the profile (owner first).
+
 ## 2026-11-20: Mac settings, library, devices (UX pass)
 
 Verified (unit tests, temporary libraries, synthetic audio; no models, no recording, no network):
@@ -4845,6 +4859,20 @@ Not verified: Settings panes and the menu bar were not captured (see the PR), De
 (the report is the iPhone's text under a Mac first line), the open Floating Notes chip menu's Manage Storage… (it opens
 Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
 notice has no Details… (a notice has none; the alert keeps it when nothing imported).
+
+## 2026-11-20: Apple Watch recorder states (REC-01, REC-02, REC-06, REC-07, REC-14, FR-02)
+
+Added `WatchWords` (the status line, microphone words, notice text, the held clock) with `WatchWordsTests`. The watch app: failure haptic and a "Recording stopped" notice for a recording that ends on its own, a directional haptic and a "Recording paused" notice for an interruption, Resume (red dot) with a small Stop while paused, "Couldn’t resume" when it fails, the clock held while paused, "Starting…" with the button dimmed during the microphone prompt, "On Watch" / "With iPhone" / "Sends later" / "Waiting for iPhone", and "Microphone is off" over where to turn it on (the iPhone says "Turn on the microphone for Daybook on your Apple Watch.").
+
+Checked: `swift test --filter WatchWordsTests`; the watch app compiles for the simulator (`scripts/build-ios.sh`). Not checked: a real watch (haptics, notices being delivered with the wrist down, the notification prompt), a real interruption or full storage, the Settings path wording on watchOS. Bookmark and the after-Stop moment (REC-03, REC-04) are not part of this.
+
+
+## 2026-11-20: Visual fixes on Mac Settings, setup and device pages (UX pass)
+
+Verified: the ad hoc debug build (`scripts/build-app.sh --debug --ad-hoc`, scratch libraries, the demo flags the screenshots used) was captured with `screencapture -l` beside each original: the recorder page's action tiles on the figures' columns, the problem box spanning the measure, Recent imports' titles in row type, Enter Recovery Key's field and the recovery key row, Settings' one switch size, the Library groups and footers, Recording's info button and status dot, Cloud's Quality groups, Models › Transcription's Download beside its size, Welcome's dividers, Settings › Devices' empty row, and the sheets' widths. `testActionTilesFallToTheFiguresColumnsAtTheSameWidths` holds the tiles' column count to the figures' widths.
+
+Not verified: the footer inset on macOS 15 and 26 (the Mac's extra 10 pt is kept there; only macOS 27 drops it), the iPhone's recovery key row and Recent imports after the shared-code changes beyond a simulator build, the live captions' speaker lane with real live speakers (only the layout was read), and a window that is key (every capture is of an inactive window). DS-07 (one toolbar height in Settings) is left for the owner to see first.
+
 
 ## 2026-11-20: Apple Watch recorder states (REC-01, REC-02, REC-06, REC-07, REC-14, FR-02)
 
@@ -4879,3 +4907,8 @@ Changed: the person is "Me" in live captions (the microphone's lane and turn lab
 Checked: `SpeakerProfileLibraryTests` (undo and redo of This Is Me from a conversation, with and without a me-profile, and of the profile's replacement), `ConversationInfoWordsTests` (the row's words), the caption suites with the new word.
 
 Not checked (no way to click, tap, or press keys here): the People link, the context menu, VoiceOver, and the screens. Left as they were: the transcript's "Me" (already "Me"), the recorder's input meters ("You" and "Call", not a speaker's name), "Pause on Soundcore"-style reason strings, and "No speakers yet" on the iPhone, which always finds speakers. Not done: the name list stays as it was (it opens on focus and scrolls; the owner wants it as a combobox). Identify Speakers beside "Speakers off" (with Tell speakers apart off that mode finds nothing, so it needs the setting turned on first), and renaming "Me" does not set the profile (owner first).
+
+## 2026-11-21: Mac chrome (notebook pages, Settings toolbar, sheets, band, page switch)
+
+PG-01: a conversation's notebook pages show on the Mac's summary page (`NotebookPagesBlock`, `NotebookPageImages` in DaybookUI), read only, with a larger page sheet (words, play from a passage's time, zoom, previous and next, Leave Out of Summaries). DS-07: every Settings page carries a back and forward pair at the leading edge (disabled where there is nowhere to go; in Models Back and Forward step through the pushed page), so the toolbar keeps one height. VMM-19: Floating Notes' phase starts at the 16 pt edge and moves over only while the close button shows. VMM-25: the Summary | Transcript switch is invisible (slot kept) with no conversation. VMM-24: Version History merges consecutive photo or page changes less than a minute apart ("2 Photos added", `VersionHistoryList.entries`). VMM-15: Version History keeps its heading in the list; wrapping it in a navigation stack to get the system title bar hid the list's first rows, so that was reverted and the sheet-title treatment stays as it was.
+Checked with `VersionHistoryListTests` and `NotebookPageImagesTests`, an ad hoc debug app build (`scripts/build-app.sh --debug --ad-hoc`), and before and after pictures in light and dark (`--notebook-demo`, `--open-notebook-page`, `--sheet`, `--open-settings`, `--notes-demo`) under ux-pass/round2/mac-chrome. Not checked: pages written on a real iPhone arriving by sync, pages with a picture or PDF background (not drawn), VoiceOver on the page sheet, a page's play button with a real recording, Increase Contrast.

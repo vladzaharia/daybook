@@ -191,8 +191,12 @@ private struct PageSwitch: View {
         let help = help(hasTranscript: hasTranscript)
         // Laid out always, so the slot is the switch's width whatever shows in it: the toggles where the column has room
         // for two pages, and Bookmark while recording, cover it.
-        Picker("View", selection: hasTranscript ? Bindable(state.window).pageMode : .constant(.summary)) {
-            ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }
+        // With no conversation there is no page to switch: nothing is lit (a selection no segment has), where it used to keep "Summary" lit.
+        let chosen = Binding<PageMode?>(
+            get: { meeting == nil ? nil : hasTranscript ? state.window.pageMode : .summary },
+            set: { if hasTranscript, let mode = $0 { state.window.pageMode = mode } })
+        Picker("View", selection: chosen) {
+            ForEach(PageMode.allCases) { mode in Text(mode.title).tag(Optional(mode)) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
