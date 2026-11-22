@@ -29,14 +29,28 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         return library
     }
 
-    /// A pass as the app runs it, with the engine's clocks at `now`.
+    private var last: Date?
+
+    /// A pass as the app runs it, with the engine's clocks at `now`; and the passes every few hours before it that a running
+    /// Mac makes (a day is a day watched).
     private func pass(_ library: LibraryController, at now: Date, file: StaticString = #filePath, line: UInt = #line) async throws {
+        if let last, now.timeIntervalSince(last) > 6 * 3600 {
+            var step = last.addingTimeInterval(6 * 3600)
+            while now.timeIntervalSince(step) > 1 { try await single(library, at: step, file: file, line: line); step = step.addingTimeInterval(6 * 3600) }
+        }
+        try await single(library, at: now, file: file, line: line)
+    }
+
+    private func single(_ library: LibraryController, at now: Date, acknowledged: Bool = true, file: StaticString = #filePath,
+                        line: UInt = #line) async throws {
+        last = now
         let engine = try XCTUnwrap(library.sync?.engine)
         await engine.setCompactionClock { now }
         await engine.setContinuousClock { SyncClockMark(boot: "test", seconds: now.timeIntervalSince1970) }
+        await engine.setPresenceClock { now }
         await library.flush()
         let applied = await library.synchronize()
-        XCTAssertEqual(applied?.acknowledged, true, "the sync pass ran and was acknowledged", file: file, line: line)
+        XCTAssertEqual(applied?.acknowledged ?? false, acknowledged, "the sync pass ran and was acknowledged", file: file, line: line)
     }
 
     private func recording() throws -> URL {
@@ -119,7 +133,13 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         XCTAssertEqual(listed?.objects[track.sha256]?.acknowledgedSince, now)
         try await pass(library, at: now.addingTimeInterval(day - 60))
         XCTAssertTrue(FileManager.default.fileExists(atPath: object.path))
-        try await pass(library, at: now.addingTimeInterval(day + 60))
+        // A pass the library doesn't apply (stopped after the engine's pass) deletes nothing, though it found it due.
+        struct Stopped: Error {}
+        library.syncApplyFault = { throw Stopped() }
+        try await single(library, at: now.addingTimeInterval(day + 60), acknowledged: false)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path))
+        library.syncApplyFault = nil
+        try await pass(library, at: now.addingTimeInterval(day + 120))
         XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: cloud.appendingPathComponent("Blobs/\(try XCTUnwrap(library.meeting(id)?.tracks.first?.sha256))").path))
     }

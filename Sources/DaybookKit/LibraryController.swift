@@ -89,6 +89,8 @@ public final class LibraryController {
     @ObservationIgnored var voiceClipsInFlight = 0
     /// Stops a voice clip at a step as a crash would there (tests).
     @ObservationIgnored var voiceClipFault: ((VoiceClipStep) throws -> Void)?
+    /// Thrown right after the engine's pass, before the library applies it (tests stop a pass there).
+    @ObservationIgnored var syncApplyFault: (() throws -> Void)?
     /// Where this device last applied the library's settings from sync whole, in this run (`SyncResult.settingsApplied`,
     /// acknowledged): the library, its folder, and the engine. Until it's the library connected now, through the same
     /// folder and engine, a Mac compresses nothing there and lets no original go, since another device's Never may not
@@ -979,10 +981,15 @@ public final class LibraryController {
         await acquireLock()
         var applied = await applyPass(sync, protecting: active, limits: limits, scope: scope)
         // A superseded original's object the pass found due goes now, still under the lock, with the library's
-        // conversations and what voice profiles hold asked again (LibrarySyncSuperseded.swift).
+        // conversations and what voice profiles hold asked again (LibrarySyncSuperseded.swift); only after a pass the
+        // library applied and acknowledged, so what it brought (a voiceprint) is asked about too.
         if let engine = sync.engine, await engine.hasSupersededObjectsDue {
-            let held = await meetingsHoldingOriginalsInICloud()
-            await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held)
+            if applied?.acknowledged == true {
+                let held = await meetingsHoldingOriginalsInICloud()
+                await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held)
+            } else {
+                await engine.discardSupersededObjectsDue()
+            }
         }
         releaseLock(); isApplyingSync = false
         applied?.editedDuringPass = editedDuringSync; applied?.settingsEditedDuringPass = settingsEditedDuringSync
@@ -1013,6 +1020,7 @@ public final class LibraryController {
             let deleted = Set(deletedMeetingIDs())
             guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: try encodedMetadata(),
                                                           limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
+            try syncApplyFault?()
             // Save edits made while iCloud hydrated files before applying the pass.
             await flush()
             try Task.checkCancellation()

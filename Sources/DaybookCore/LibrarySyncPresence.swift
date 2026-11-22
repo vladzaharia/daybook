@@ -48,6 +48,8 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// What it acknowledges of compacting Macs' notices of superseded originals, and the objects listed there it holds
     /// (LibrarySyncSuperseded.swift). Additive: earlier versions write none, and acknowledge nothing.
     var superseded: [SupersededAck]?
+    /// The journal entries it wrote lately, beside those acknowledgements (`SupersededWatermark`). Additive.
+    var written: SupersededWatermark?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -57,7 +59,7 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
-        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem, superseded
+        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem, superseded, written
     }
 
     init(from decoder: Decoder) throws {
@@ -83,6 +85,7 @@ struct SyncDeviceRecord: Codable, Equatable {
         pendingUploads = (try? values.decodeIfPresent(Int.self, forKey: .pendingUploads)).flatMap { $0.map { max(0, $0) } }
         problem = (try? values.decodeIfPresent(SyncPresenceProblem.self, forKey: .problem)) ?? nil
         superseded = (try? values.decodeIfPresent([SupersededAck].self, forKey: .superseded)) ?? nil
+        written = (try? values.decodeIfPresent(SupersededWatermark.self, forKey: .written)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -168,6 +171,7 @@ extension LibrarySyncEngine {
         record.pendingUploads = presenceUploads
         record.problem = presenceProblem ?? (presenceStorageFull ? .storageFull : nil)
         record.superseded = supersededRuntime.acks
+        record.written = supersededRuntime.acks == nil ? nil : supersededRuntime.written
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }

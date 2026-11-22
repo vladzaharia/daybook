@@ -125,8 +125,11 @@ struct CompactionInput {
     /// The whole journal was read: nothing pending, deferred, or unreadable.
     var complete: Bool
     /// The conversations the library supplied to the pass (what superseded originals are judged by,
-    /// LibrarySyncSuperseded.swift).
+    /// LibrarySyncSuperseded.swift), whether new library settings arrived in it, and the conversations it changed: the
+    /// library's word on voice profiles, given before the pass, doesn't cover those.
     var meetings: [Meeting] = []
+    var settingsChanged = false
+    var changed: Set<UUID> = []
 }
 
 extension LibrarySyncEngine {
@@ -251,20 +254,25 @@ extension LibrarySyncEngine {
 
     /// One run of compaction, at the end of a pass, on the compacting Mac. Best effort: what fails is tried again later.
     func runCompaction(_ input: CompactionInput, now: Date) {
-        guard let policy = compactionPolicy, audioPolicy == .eager, device?.deviceClass == .mac, libraryID != nil,
-              input.complete, compactionRuntime.readComplete, journalCache.unreadable.isEmpty else { supersededRuntime.due = [:]; return }
-        // Every device seen lately reads a compacted library, and this is the Mac to compact it.
-        guard let others = recentPresence(now: now), others.allSatisfy({ ($0.features ?? []).contains(Self.compactionFeature) }) else {
-            supersededRuntime.due = [:]; return
+        // Superseded originals' objects (LibrarySyncSuperseded.swift): a Mac that can't compact lists none, and a pass
+        // that can't judge what's free takes out of its notice what certainly isn't, whatever else stops here.
+        guard let policy = compactionPolicy, audioPolicy == .eager, device?.deviceClass == .mac, libraryID != nil else {
+            withdrawSupersededNotice(now: now); return
         }
-        let candidates = others.filter { record in
+        let recent = recentPresence(now: now)
+        // Every device seen lately reads a compacted library, and this is the Mac to compact it.
+        if let recent, !recent.allSatisfy({ ($0.features ?? []).contains(Self.compactionFeature) }) { withdrawSupersededNotice(now: now); return }
+        let candidates = (recent ?? []).filter { record in
             record.deviceClass == .mac && sealing.map { record.key == SyncDeviceKeyState(state: .ready, id: $0.current.idHex) } ?? true
         }
         // An earlier identity of a reinstalled device never syncs again: it isn't the one to compact. (It still has to
         // acknowledge: a device with the same name that's merely away may come back.)
         let superseded = Set(((try? knownDevices(now: now)) ?? []).filter { $0.supersededBy != nil }.map(\.id))
-        guard (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() == deviceID else {
+        if recent != nil, (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() != deviceID {
             withdrawSupersededNotice(now: now); return
+        }
+        guard let others = recent, input.complete, compactionRuntime.readComplete, journalCache.unreadable.isEmpty else {
+            trimSupersededNotice(input, others: recent, now: now); return
         }
         // Conversations' history, once every device seen lately has acknowledged the proposal. With no other device
         // seen lately while another has written presence that isn't superseded or six months old (all away for a while,
@@ -276,7 +284,7 @@ extension LibrarySyncEngine {
         // A run dated after now was by a clock that was ahead, since set right: it doesn't hold compaction back.
         if let last = compactionRuntime.lastRun, last <= now, now.timeIntervalSince(last) < policy.interval {
             // Superseded originals' objects are followed on every such pass, not only when compaction runs.
-            if !dormant, !ahead { runSupersededObjects(input, others: others, now: now) } else { supersededRuntime.due = [:] }
+            if !dormant, !ahead { runSupersededObjects(input, others: others, now: now) } else { withdrawSupersededNotice(now: now) }
             return
         }
         compactionRuntime.lastRun = now
@@ -321,7 +329,7 @@ extension LibrarySyncEngine {
             }
         }
         // Superseded originals' objects: which are free to go, announced, acknowledged, and due (deleted after the pass).
-        if !dormant, !ahead { runSupersededObjects(input, others: others, now: now) } else { supersededRuntime.due = [:] }
+        if !dormant, !ahead { runSupersededObjects(input, others: others, now: now) } else { withdrawSupersededNotice(now: now) }
         tidyCompactionRecords(policy, now: now, report: &report)
         if compactionRuntime.pendingProposal == nil || proposalIsStale(input, now: now) {
             let stale = compactionRuntime.pendingProposal

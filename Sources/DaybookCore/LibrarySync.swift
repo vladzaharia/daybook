@@ -248,6 +248,12 @@ public actor LibrarySyncEngine {
     /// The continuous clock superseded originals' waits are measured by too (tests move it on).
     var continuousClock: @Sendable () -> SyncClockMark = { SyncClockMark.current() }
     func setContinuousClock(_ clock: @escaping @Sendable () -> SyncClockMark) { continuousClock = clock }
+    /// The clock a pass's presence record is dated by (tests move it on).
+    var presenceClock: @Sendable () -> Date = { Date() }
+    func setPresenceClock(_ clock: @escaping @Sendable () -> Date) { presenceClock = clock }
+    /// Thrown in the coordinated delete of a superseded original, after its object went (tests stop it there).
+    var supersededDeleteFault: (@Sendable () throws -> Void)?
+    func setSupersededDeleteFault(_ fault: (@Sendable () throws -> Void)?) { supersededDeleteFault = fault }
     func setCompactionPolicy(_ policy: SyncCompactionPolicy?) { compactionPolicy = policy }
 
     /// `waitsForListing`: in the iCloud container, a library (`daybook-sync.json`) isn't created until
@@ -676,6 +682,8 @@ public actor LibrarySyncEngine {
         heldPublicationDue = pass.nextPublication; heldPublications = pass.heldPublications
         retainCaches(metadataHeads: Set(metadataHeads).union(state.metadataHeads))
         let journalIncomplete = pass.journalIncomplete
+        // Library settings arrived in this pass (voiceprints among them): what the library judged before it isn't current.
+        let settingsChanged = Set(metadataHeads) != Set(state.metadataHeads)
         // An encrypted library: seal what's live from before (or under an older key), and retire what's no longer
         // needed once it's safe. Nothing here changes what this pass returns.
         if sealing != nil, !Task.isCancelled {
@@ -689,7 +697,6 @@ public actor LibrarySyncEngine {
             }
             // A conversation that changed in this pass, or any while new settings arrived (voiceprints among them), wasn't
             // judged by the library's hold list, which it made before the pass.
-            let settingsChanged = Set(metadataHeads) != Set(state.metadataHeads)
             var live = withOriginalsHeldForVoice(pass.liveAssets, meetings: pass.output,
                                                  unjudged: settingsChanged ? Set(pass.output.keys) : pass.changed)
             for (id, meeting) in pass.output {
@@ -716,7 +723,8 @@ public actor LibrarySyncEngine {
             let complete = pass.pendingDownloads == 0 && pass.budget.deferred == 0 && !journalIncomplete && !pass.metadataIncomplete && pass.held.isEmpty
             runCompaction(CompactionInput(events: pass.events, metadata: pass.metadata, metadataHeads: metadataHeads,
                                           entries: (pass.eventEntries + pass.metadataEntries).filter { !sealingRuntime.replacedEntries.contains($0.path) },
-                                          deleted: pass.deletes, complete: complete, meetings: pass.localMeetings), now: compactionClock())
+                                          deleted: pass.deletes, complete: complete, meetings: pass.localMeetings,
+                                          settingsChanged: settingsChanged, changed: pass.changed), now: compactionClock())
         } else {
             supersededRuntime.due = [:]
         }
@@ -738,7 +746,7 @@ public actor LibrarySyncEngine {
         // What this device acknowledges of compacting Macs' notices, and holds (LibrarySyncSuperseded.swift).
         noteSupersededAcks(pass.localMeetings)
         // Presence is advisory: failing to refresh it never fails the pass.
-        if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
+        if !Task.isCancelled { try? writePresence(now: presenceClock(), force: false) }
         let written = takeCourierWrites()
         return SyncResult(checkpointID: checkpointID, meetings: pass.output.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date > $1.date },
             deletedMeetingIDs: pass.deletes, metadataVersions: versions, warnings: Array(Set(pass.warnings)).sorted(),
@@ -1547,6 +1555,7 @@ public actor LibrarySyncEngine {
         // An encrypted library's entries are sealed under its current key; the entry's ID is the same either way.
         if let sealing {
             try writeSealed(bytes, id: id, kind: directory == "Events" ? .event : .metadata, key: sealing.current)
+            noteOwnWrite(id, directory: directory)
             return id
         }
         let url = remoteRoot.appendingPathComponent("\(directory)/\(id).json")
@@ -1558,6 +1567,8 @@ public actor LibrarySyncEngine {
         let path = "\(directory)/\(id).json"
         ownJournalWrites.insert(path)
         courierWrites[path] = SyncJournalFile(path: path, sha256: id, size: Int64(bytes.count))
+        // What this device wrote, for the watermark its presence carries (LibrarySyncSuperseded.swift).
+        noteOwnWrite(id, directory: directory)
         return id
     }
     func journalFiles(in name: String) throws -> [URL] {
@@ -1587,7 +1598,10 @@ public actor LibrarySyncEngine {
             guard fm.fileExists(atPath: url.path) else {
                 // An on-demand replica holds only some audio. A track it never fetched (or evicted) is still
                 // published, unchanged, by reference to the object already in the sync folder or journal.
-                if audioPolicy == .onDemand, SyncFiles.isHash(track.sha256), try mayPublishByReference(track.sha256, journalAssets: journalAssets) {
+                // So is a recording's original a compacting Mac deleted, with nothing here to bring it (it names what it named).
+                var referable = false
+                if SyncFiles.isHash(track.sha256), audioPolicy == .onDemand { referable = try mayPublishByReference(track.sha256, journalAssets: journalAssets) }
+                if SyncFiles.isHash(track.sha256), referable || deletedAndAbsent(track.sha256) {
                     assets.append(SyncAsset(relativePath: track.relativePath, sha256: track.sha256))
                     byReference.insert(track.relativePath)
                     continue
@@ -1716,6 +1730,9 @@ public actor LibrarySyncEngine {
                 if asset.relativePath.hasPrefix(PageDrawing.folder + "/") { LocalFiles.touch(destination, unlessWithin: 3_600) }
                 continue
             }
+            // A recording's original a compacting Mac deleted from iCloud, named again with nothing here to bring it: the
+            // conversation applies without it (the pass warns; it's installed once a device that holds it uploads it again).
+            if deletedAndAbsent(asset.sha256) { continue }
             // Copying audio is the expensive part of an eager pass; respect the pass's time budget.
             if budget.timeExceeded { throw SyncDeferredWork() }
             // Sealed under a key held here, or plaintext from before an encrypted library's sealer reached it.
@@ -2031,6 +2048,10 @@ struct SyncCheckpoint: Codable {
     var heldAside: [String: Date]?
     /// Other devices' presence as this device last read it (`clockLooksAhead`), by device ID.
     var presenceSightings: [String: SyncPresenceSighting]?
+    /// The events this device wrote in the last week, and the newest settings version it wrote, for its watermark
+    /// (LibrarySyncSuperseded.swift). Nil in checkpoints from earlier versions.
+    var recentWrites: [SyncRecentWrite]?
+    var lastSettingsWrite: String?
 }
 /// Another device's presence as this device last read it: when it says it was written, and when (by this device's clock)
 /// this device saw that change. Nil `changed`: the first time it was read.
