@@ -1,5 +1,28 @@
 # Validation record
 
+## Superseded originals: a name given is a voiceprint first (2026-11-22, sixth round)
+
+The fifth review's blocker and follow-ups, on `storage/icloud-cleanup`. A conversation changed (or not brought up to
+date) in a pass that ends before the restart (a trim, a withdrawal, an early return) is remembered, in the runtime and
+with the waits, and restarts its original's wait on the next pass that judges, after a relaunch too. At the root, the
+deletion under the lock also waits for speaker profiles to settle: the Mac's `SpeakerProfileCoordinator` registers with
+the library and says whether a reconciliation is running or what it reads changed since the last one settled (a name
+given not yet a voiceprint); that pauses the deletion, and a conversation it leaves alone for now holds its originals. A
+reconciliation whose result a sync dropped no longer counts as settled. A paused pass still takes what certainly isn't
+free out of the listing.
+
+**Verified.** `SupersededObjectsTests` (74): another conversation's recording still downloading while the iPhone changes
+the compressed one, then a relaunch, the next pass restarting the wait; a presence it can't read, its own notice not
+downloaded, and the library saying stop, each followed by a restart; a paused pass taking what the iPhone holds out of
+the notice; a commit, then the notice, kept from iCloud for several passes only delaying the deletion.
+`SupersededOriginalsLibraryTests` (4): a coordinator not settled since it started, a name given since it settled, and a
+conversation it leaves alone each keeping the original; the next pass after it settles deleting it.
+`SpeakerProfileLibraryTests` (25) unchanged. 11 mutations (`scratchpad/mut/icloud-r6.py`): 9 fail a test (remembering,
+applying, persisting and clearing the set; the settled check, the skipped hold, the coordinator registering, its inputs
+check; the paused pass's filter). Two can't: "unsettled while one runs" is implied (a reconciliation proceeds only while
+what it reads differs from what it last settled), and a result a sync dropped mid-reconciliation needs a sync to begin
+during the detached work, which no test can time without guessing; both stay.
+
 ## Superseded originals: waits survive commits and rewrites (2026-11-22, fifth round)
 
 The fourth review's three blockers, on `storage/icloud-cleanup` (docs/icloud-sync.md, "Superseded objects go from

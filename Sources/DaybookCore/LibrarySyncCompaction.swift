@@ -265,6 +265,7 @@ extension LibrarySyncEngine {
 
     /// One run of compaction, at the end of a pass, on the compacting Mac. Best effort: what fails is tried again later.
     func runCompaction(_ input: CompactionInput, now: Date) {
+        rememberChangedConversations(input)
         // Superseded originals' objects (LibrarySyncSuperseded.swift): a Mac that can't compact lists none, and a pass
         // that can't judge what's free takes out of its notice what certainly isn't, whatever else stops here.
         guard let policy = compactionPolicy, audioPolicy == .eager, device?.deviceClass == .mac, libraryID != nil else {

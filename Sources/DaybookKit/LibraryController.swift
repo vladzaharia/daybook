@@ -91,6 +91,8 @@ public final class LibraryController {
     @ObservationIgnored var voiceClipFault: ((VoiceClipStep) throws -> Void)?
     /// Thrown right after the engine's pass, before the library applies it (tests stop a pass there).
     @ObservationIgnored var syncApplyFault: (() throws -> Void)?
+    /// What keeps speaker profiles in step here (the Mac's), once it runs: asked before a superseded original leaves iCloud.
+    @ObservationIgnored public internal(set) weak var speakerProfileCoordinator: SpeakerProfileCoordinator?
     /// Where this device last applied the library's settings from sync whole, in this run (`SyncResult.settingsApplied`,
     /// acknowledged): the library, its folder, and the engine. Until it's the library connected now, through the same
     /// folder and engine, a Mac compresses nothing there and lets no original go, since another device's Never may not
@@ -983,11 +985,14 @@ public final class LibraryController {
         // A superseded original's object the pass found due goes now, still under the lock, with the library's
         // conversations, its settings, and what voice profiles hold asked again (LibrarySyncSuperseded.swift); only after a
         // pass the library applied and acknowledged, so what it brought (a voiceprint) is asked about too.
+        // A name not yet a voiceprint here (speaker profiles not settled since what they read last changed) is a pause too,
+        // and a conversation they leave alone for now (recording, processing) holds its originals.
         if let engine = sync.engine, await engine.hasSupersededObjectsDue {
             let current = await settingsAreCurrent()
-            if applied?.acknowledged == true, supersededJudgment(settingsCurrent: current) == .judge,
+            let voices = speakerProfileCoordinator?.pendingVoiceWork
+            if applied?.acknowledged == true, supersededJudgment(settingsCurrent: current) == .judge, voices?.unsettled != true,
                let held = await meetingsHoldingOriginalsInICloud() {
-                await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held)
+                await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held.union(voices?.skipped ?? []))
             } else {
                 await engine.discardSupersededObjectsDue()
             }

@@ -676,6 +676,131 @@ final class SupersededObjectsTests: XCTestCase {
         XCTAssertFalse(exists(blob(compressed.original.sha256)))
     }
 
+    /// A conversation changed in a pass that can't judge (another conversation's recording still downloading) isn't
+    /// forgotten: the next pass that judges, after a relaunch too, starts its original's wait again.
+    func testBehaviorAConversationChangedInAPassThatCantJudgeStartsItsWaitLater() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        try await acknowledged(mac, phone)
+        let now = try await acknowledgedSince(mac, compressed.original.sha256)
+        try await noticed(mac, phone, at: now.addingTimeInterval(day - 60))
+        // On the iPhone, something new recorded, and a name given in the compressed conversation.
+        let source = root.appendingPathComponent("walk.wav")
+        try Data(repeating: 77, count: 4_096).write(to: source)
+        let walk = try await MeetingStore(rootURL: local("Phone")).importAudio(from: source, into: Meeting(title: "Walk"), source: .microphone)
+        try await editOnPhone(compressed.meeting.id, "Vlad named on the iPhone")
+        try await pass(phone, "Phone", at: now.addingTimeInterval(day), watched: false)
+        // The new recording's audio hasn't reached the Mac: its pass can't judge.
+        let walkObject = blob(walk.tracks[0].sha256)
+        cloud.holdDownloads(true)
+        try cloud.evict(walkObject)
+        let incomplete = try await pass(mac, "Mac", at: now.addingTimeInterval(day + 60), watched: false)
+        XCTAssertGreaterThan(incomplete.pendingDownloads, 0)
+        XCTAssertTrue(exists(blob(compressed.original.sha256)))
+        cloud.holdDownloads(false)
+        try cloud.deliver(walkObject)
+        let relaunched = try self.mac()
+        let judged = now.addingTimeInterval(day + 120)
+        try await noticed(relaunched, phone, at: judged, watched: false)
+        XCTAssertTrue(exists(blob(compressed.original.sha256)), "the name may not be a voiceprint yet")
+        let state = await relaunched.supersededState()
+        XCTAssertEqual(state.objects[compressed.original.sha256]?.since, judged, "it starts again")
+        XCTAssertNil(state.unrestarted)
+    }
+
+    /// Every other way a pass ends before judging keeps a changed conversation for the next one that does: a presence it
+    /// can't read (a trim), its own notice not downloaded (nothing runs), the library saying stop (a withdrawal).
+    func testBehaviorEveryPassThatDoesntJudgeKeepsAChangedConversationForTheNext() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        try await acknowledged(mac, phone)
+        var since = try await acknowledgedSince(mac, compressed.original.sha256)
+        let record = remote.appendingPathComponent("Superseded/\(SupersededRecord.fileName(for: "Mac"))")
+        let exits: [(String, () throws -> Void, () throws -> Void, SupersededJudgment)] = [
+            ("a presence it can't read", { self.cloud.holdDownloads(true); try self.cloud.evict(self.presenceURL("Phone")) },
+             { self.cloud.holdDownloads(false); try self.cloud.deliver(self.presenceURL("Phone")) }, .judge),
+            ("its own notice not downloaded", { self.cloud.holdDownloads(true); try self.cloud.evict(record) },
+             { self.cloud.holdDownloads(false); try self.cloud.deliver(record) }, .judge),
+            ("the library saying stop", {}, {}, .stop),
+        ]
+        for (index, (name, block, unblock, judgment)) in exits.enumerated() {
+            // Caught up a day after its acknowledgement, then changed on the iPhone.
+            try await noticed(mac, phone, at: since.addingTimeInterval(day - 60))
+            try await editOnPhone(compressed.meeting.id, "Edit \(index)")
+            try await pass(phone, "Phone", at: since.addingTimeInterval(day), watched: false)
+            try block()
+            try await pass(mac, "Mac", at: since.addingTimeInterval(day + 60), watched: false, judgment: judgment)
+            try unblock()
+            let judged = since.addingTimeInterval(day + 120)
+            try await noticed(mac, phone, at: judged, watched: false)
+            XCTAssertTrue(exists(blob(compressed.original.sha256)), name)
+            try await noticed(mac, phone, at: judged.addingTimeInterval(60), watched: false)
+            // Started again on the pass that judged (withdrawn, it's listed afresh on the pass after).
+            let state = await mac.supersededState()
+            XCTAssertEqual(state.objects[compressed.original.sha256]?.since, judgment == .stop ? judged.addingTimeInterval(60) : judged,
+                           "\(name): it starts again")
+            try await noticed(mac, phone, at: judged.addingTimeInterval(120), watched: false)
+            let acknowledged = await mac.supersededState()
+            since = try XCTUnwrap(acknowledged.objects[compressed.original.sha256]?.acknowledgedSince)
+        }
+        try await noticed(mac, phone, at: since.addingTimeInterval(day + 60))
+        XCTAssertFalse(exists(blob(compressed.original.sha256)))
+    }
+
+    /// A pass that judges nothing (the library says pause) still takes out of the listing what certainly isn't free:
+    /// here what the iPhone holds, so it can publish it by reference.
+    func testBehaviorAPausedPassStillTakesWhatsHeldOutOfTheNotice() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        try await acknowledged(mac, phone)
+        let now = try await acknowledgedSince(mac, compressed.original.sha256)
+        try await pass(phone, "Phone", at: now.addingTimeInterval(60), watched: false)
+        try editPresence("Phone") { record in
+            guard var acks = record["superseded"] as? [[String: Any]] else { return }
+            for index in acks.indices { acks[index]["holds"] = [compressed.original.sha256] }
+            record["superseded"] = acks
+        }
+        try await pass(mac, "Mac", at: now.addingTimeInterval(120), watched: false, judgment: .pause)
+        XCTAssertEqual(try notice()?.objects, [])
+    }
+
+    /// A commit, then the notice, kept from iCloud for several passes: the waiting original's wait and acknowledgement go
+    /// on, nothing comes due meanwhile (past its day too), and it goes on the first pass after.
+    func testBehaviorACommitOrTheNoticeHeldForSeveralPassesOnlyDelaysIt() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        try await acknowledged(mac, phone)
+        let start = try await acknowledgedSince(mac, compressed.original.sha256)
+        let before = await mac.supersededState().objects[compressed.original.sha256]
+        // Another recording replaced, its commit kept from iCloud.
+        let time = start.addingTimeInterval(3600)
+        let source = root.appendingPathComponent("held.wav")
+        try Data(repeating: 61, count: 8_192).write(to: source)
+        let meeting = try await MeetingStore(rootURL: local("Mac")).importAudio(from: source, into: Meeting(title: "Held"), source: .microphone)
+        try await pass(mac, "Mac", at: time, watched: false)
+        try await pass(phone, "Phone", at: time.addingTimeInterval(10), watched: false)
+        let replaced = try await compress(meeting, copyByte: 161)
+        cloud.holdUploads(under: remote.appendingPathComponent("Compaction"))
+        for step in 1...6 { try await noticed(mac, phone, at: time.addingTimeInterval(Double(step) * 60), watched: false) }
+        try await noticed(mac, phone, at: start.addingTimeInterval(day + 60))
+        XCTAssertTrue(exists(blob(compressed.original.sha256)), "a commit still uploading")
+        var state = await mac.supersededState()
+        XCTAssertEqual(state.objects[compressed.original.sha256]?.since, before?.since)
+        XCTAssertEqual(state.objects[compressed.original.sha256]?.acknowledgedSince, start)
+        XCTAssertNil(state.objects[replaced.original.sha256], "not listed while its commit isn't in iCloud")
+        // The commit in iCloud, then the notice listing the new one kept from it.
+        cloud.holdUploads(under: remote.appendingPathComponent("Superseded"))
+        for step in 1...3 { try await noticed(mac, phone, at: start.addingTimeInterval(day + 60 + Double(step) * 60), watched: false) }
+        XCTAssertTrue(exists(blob(compressed.original.sha256)), "the notice still uploading")
+        state = await mac.supersededState()
+        XCTAssertNotNil(state.objects[replaced.original.sha256])
+        XCTAssertEqual(state.objects[compressed.original.sha256]?.acknowledgedSince, start)
+        cloud.holdUploads(under: nil)
+        try await noticed(mac, phone, at: start.addingTimeInterval(day + 300), watched: false)
+        XCTAssertFalse(exists(blob(compressed.original.sha256)))
+        XCTAssertTrue(exists(blob(replaced.original.sha256)))
+    }
+
     /// A conversation the pass couldn't bring up to date (this Mac's own change to it couldn't be saved to iCloud) starts
     /// its originals' waits again; and what another device wrote in it isn't applied, so a device saying it wrote that
     /// keeps everything.
@@ -1949,6 +2074,15 @@ final class SupersededObjectsTests: XCTestCase {
         var record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         change(&record)
         try JSONSerialization.data(withJSONObject: record).write(to: url)
+    }
+
+    /// The person changes the conversation on the iPhone (a name given, say).
+    private func editOnPhone(_ id: UUID, _ notes: String) async throws {
+        let store = try MeetingStore(rootURL: local("Phone"))
+        let listed = try await store.list()
+        var meeting = try XCTUnwrap(listed.first { $0.id == id })
+        meeting.notes = notes
+        try await store.save(meeting)
     }
 
     private func agePresence(_ deviceID: String, days: Double) throws {

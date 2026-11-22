@@ -72,7 +72,7 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
 
     /// A single Mac's library with a recording compressed, nothing holding its original: listed and acknowledged, and due a
     /// day after the moment returned.
-    private func listed() async throws -> (library: LibraryController, object: URL, acknowledged: Date) {
+    private func listed() async throws -> (library: LibraryController, object: URL, acknowledged: Date, meeting: UUID) {
         let cloud = root.appendingPathComponent("Cloud", isDirectory: true)
         try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
         let library = try await library(cloud: cloud)
@@ -93,7 +93,7 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
             now = now.addingTimeInterval(60)
             try await pass(library, at: now)
             if let since = await library.sync?.engine?.supersededState().objects[track.sha256]?.acknowledgedSince {
-                return (library, cloud.appendingPathComponent("Blobs/\(track.sha256)"), since)
+                return (library, cloud.appendingPathComponent("Blobs/\(track.sha256)"), since, id)
             }
         }
         struct NeverListed: Error {}
@@ -112,7 +112,7 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
     /// skipped, a setting or a voiceprint or profile in a shape it can't read (nothing is listed); and settings that aren't
     /// the library's as sync last delivered them (nothing comes due, the wait goes on).
     func testBehaviorTheLibrarysSettingsKeepItWhenTheyMust() async throws {
-        let (library, object, since) = try await listed()
+        let (library, object, since, _) = try await listed()
         try await pass(library, at: since.addingTimeInterval(day - 60))
         var now = since.addingTimeInterval(day + 60)
         func newer<Value: Codable>(_ type: Value.Type) throws -> LibraryValue<Value> {
@@ -155,9 +155,43 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
     }
 
+    /// Not while a name may not be a voiceprint yet: right before deleting, the library asks the Mac's speaker-profile
+    /// coordinator, which hasn't settled since it started, or since a name was given; and a conversation it leaves alone
+    /// for now (being processed) holds its originals.
+    func testBehaviorANameNotYetAVoiceprintKeepsIt() async throws {
+        let (library, object, since, id) = try await listed()
+        try await pass(library, at: since.addingTimeInterval(day - 60))
+        var skipped: Set<UUID> = []
+        let coordinator = SpeakerProfileCoordinator(library: library, options: { .init() }, skipping: { skipped })
+        coordinator.delay = .seconds(3_600)
+        coordinator.start()
+        defer { coordinator.stop() }
+        var now = since.addingTimeInterval(day + 60)
+        try await single(library, at: now)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "not settled since it started")
+        await coordinator.refresh()
+        library.update(id) { $0.speakers = [Speaker(id: "run:1", name: "Vlad")] }
+        now = now.addingTimeInterval(60)
+        try await single(library, at: now)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "a name given since it last settled")
+        skipped = [id]
+        await coordinator.refresh()
+        // The profile that name taught goes out first (a pass bringing settings judges nothing), then: held.
+        for _ in 0..<2 {
+            now = now.addingTimeInterval(60)
+            try await single(library, at: now)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "left alone while it's processed")
+        skipped = []
+        await coordinator.refresh()
+        now = now.addingTimeInterval(60)
+        try await single(library, at: now)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
+    }
+
     /// Never chosen while the pass ran: what it found due stays, asked again right before deleting.
     func testBehaviorNeverChosenDuringThePassKeepsIt() async throws {
-        let (library, object, since) = try await listed()
+        let (library, object, since, _) = try await listed()
         try await pass(library, at: since.addingTimeInterval(day - 60))
         library.syncApplyFault = { [unowned library] in MainActor.assumeIsolated { library.setRecordingCompression(.never) } }
         try await single(library, at: since.addingTimeInterval(day + 60))

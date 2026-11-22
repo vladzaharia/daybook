@@ -182,6 +182,8 @@ struct SupersededObjectsState: Codable, Equatable {
     /// The first check after such a gap: every device must be seen since before anything comes due.
     var wokeAt: Date?
     var presence: [String: SeenPresence] = [:]
+    /// Conversations changed, or not brought up to date, in a pass that didn't judge (`unrestarted`).
+    var unrestarted: Set<UUID>?
 
     init(epoch: String) { self.epoch = epoch }
 
@@ -240,6 +242,10 @@ struct SupersededRuntime {
     var dueJournal: Set<String> = []
     /// Of those, what the pass applied (the entries of a conversation whose own publication failed weren't).
     var dueApplied: Set<String> = []
+    /// Conversations a pass changed, or couldn't bring up to date, whose originals' waits haven't started again yet: every
+    /// pass adds its own, and only a pass that reaches the restart (`runSupersededObjects`) clears them, so one that ends
+    /// in a trim, a withdrawal, or an early return doesn't lose them. Kept with the waits too, across a relaunch.
+    var unrestarted: Set<UUID> = []
     /// The epoch a new record of waits begins with, in this process.
     var freshEpoch = UUID().uuidString
     /// What each Trash conversation's files said, by path, while its stamp holds (`digestsNamedHere`).
@@ -449,6 +455,19 @@ extension LibrarySyncEngine {
         let complete = events.count <= Self.supersededWatermarkEvents
         return SupersededWatermark(settings: state.lastSettingsWrite,
                                    events: complete ? events : Array(events.suffix(Self.supersededWatermarkEvents)), complete: complete)
+    }
+
+    /// Remembers the conversations this pass changed or couldn't bring up to date until a pass restarts their originals'
+    /// waits (`SupersededRuntime.unrestarted`), with the waits when there are any.
+    func rememberChangedConversations(_ input: CompactionInput) {
+        guard audioPolicy == .eager, device?.deviceClass == .mac else { return }
+        let ids = input.changed.union(input.unapplied)
+        guard !ids.isSubset(of: supersededRuntime.unrestarted) else { return }
+        supersededRuntime.unrestarted.formUnion(ids)
+        guard let url = supersededStateURL, let data = try? Data(contentsOf: url),
+              var saved = try? JSONDecoder().decode(SupersededObjectsState.self, from: data), saved.schemaVersion == 4 else { return }
+        saved.unrestarted = (saved.unrestarted ?? []).union(supersededRuntime.unrestarted)
+        try? saveSupersededState(saved)
     }
 
     /// What a sync pass on the compacting Mac says of its own notice: there but unreadable (damaged, too large, or not
@@ -798,6 +817,9 @@ extension LibrarySyncEngine {
         let step = supersededClockStep(state, now: now, clock: clock)
         if case .watched(let seconds) = step { state.watched += seconds } else { state.wokeAt = now }
         state.lastCheck = now; state.lastClock = clock
+        // What this pass, or one since the last that got this far, changed or couldn't bring up to date.
+        let changed = input.changed.union(input.unapplied).union(supersededRuntime.unrestarted).union(state.unrestarted ?? [])
+        state.unrestarted = nil
         noteParticipants(others, in: &state, now: now)
         var free: [String: (copies: [String], stamp: VerifiedAsset)] = [:]
         // What the pass can't judge (the library's word on voice profiles was given before it, without what it brought),
@@ -817,11 +839,17 @@ extension LibrarySyncEngine {
             let voice = originalsHeldForVoice
             for (original, tracks) in facts.byOriginal {
                 // A name given in it, say, isn't a voiceprint until the library has seen it: it starts again, judged or not.
-                if tracks.contains(where: { input.changed.contains($0.meetingID) || input.unapplied.contains($0.meetingID) }) {
+                if tracks.contains(where: { changed.contains($0.meetingID) }) {
                     restarted.insert(original)
                     continue
                 }
-                if paused { unjudged.insert(original); continue }
+                if paused {
+                    // What certainly isn't free still leaves the listing, as on a pass that can't judge (removing is safe).
+                    let held = named.contains(original) || facts.held.contains(original) || holdsAll || heldElsewhere.contains(original)
+                        || !tracks.allSatisfy({ copy in voice.map { !$0.held.contains(copy.meetingID) } ?? false })
+                    if !held { unjudged.insert(original) }
+                    continue
+                }
                 guard !named.contains(original), !facts.held.contains(original), !holdsAll, !heldElsewhere.contains(original),
                       tracks.allSatisfy({ copy in voice.map { !$0.held.contains(copy.meetingID) && $0.judged.contains(copy.meetingID) } ?? false }),
                       tracks.allSatisfy(copyStands), let stamp = objectStamp(blobURL(original), digest: original) else { continue }
@@ -851,8 +879,9 @@ extension LibrarySyncEngine {
             }
         }
         for original in kept where restarted.contains(original) || step == .restart { startAgain(original) }
-        // An acknowledgement starts only with the notice in iCloud, and ends only when it stops holding (a device
-        // acknowledges a listing only once it has read the notice from iCloud).
+        // An acknowledgement starts only with the notice in iCloud, and ends only when it stops holding or the wait starts
+        // again. The first is a belt: a device acknowledges through a listing's sequence only once it has read a notice
+        // listing it from iCloud, so `through` already proves the notice got there.
         let noticed = publishSupersededRecord(state, now: now)
         for (original, var candidate) in state.objects {
             let starts = candidate.acknowledgedSince == nil || candidate.acknowledgedSince! > now
@@ -869,6 +898,7 @@ extension LibrarySyncEngine {
                 return
             }
         }
+        supersededRuntime.unrestarted = []
         // What the pass read, and of that what it applied (a conversation whose own change couldn't be published wasn't).
         let known = Set(input.events.keys).union(input.metadata.keys).union(compactionRuntime.prunedIDs)
         let applied = known.subtracting(input.events.filter { input.unapplied.contains($0.value.meetingID) }.keys)

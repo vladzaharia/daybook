@@ -326,15 +326,18 @@ public final class SpeakerProfileCoordinator {
         self.library = library; self.options = options; self.skipping = skipping
     }
 
-    /// Watches the library from now on, and reconciles once soon.
+    /// Watches the library from now on, and reconciles once soon. The library asks it, right before deleting a superseded
+    /// original from iCloud, whether every name is a voiceprint yet (`pendingVoiceWork`).
     public func start() {
         guard observation == nil else { return }
         let library = self.library
+        library.speakerProfileCoordinator = self
         observation = ObservationWatch({ _ = library.meetings; _ = library.metadata; _ = library.isLoaded }) { [weak self] in self?.schedule() }
         schedule()
     }
 
     public func stop() {
+        if library.speakerProfileCoordinator === self { library.speakerProfileCoordinator = nil }
         observation?.cancel()
         observation = nil
         scheduled?.cancel(); scheduled = nil
@@ -365,11 +368,21 @@ public final class SpeakerProfileCoordinator {
             guard inputs != reconciled else { break }
             let changed = await library.reconcileSpeakerProfiles(options: options, skipping: skipping)
             changedAny = changedAny || changed
+            // A sync that began meanwhile drops what this worked out: not settled, it runs again.
+            if !changed, library.isApplyingSync { schedule(); break }
             if !changed { reconciled = inputs; break }
         }
         if again { again = false; schedule() }
         didRefresh?()
         return changedAny
+    }
+
+    /// Whether a name given, or a speaker changed, may not be a voiceprint yet: a reconciliation is running, or what it
+    /// reads changed since the last one settled (one is scheduled, or will be); and the conversations it leaves alone for
+    /// now (being recorded or processed).
+    public var pendingVoiceWork: (unsettled: Bool, skipped: Set<UUID>) {
+        let options = options(), skipping = skipping()
+        return (running || reconciled != Self.inputs(library, options: options, skipping: skipping), skipping)
     }
 
     /// What a reconciliation reads, hashed: speakers, their names, embeddings and identities, renames,
