@@ -1,48 +1,78 @@
 # Validation record
 
-## Superseded originals leave iCloud (2026-11-21)
+## Superseded originals leave iCloud, announced and acknowledged (2026-11-21, second round)
 
 After a Mac replaces a recording with a compressed copy, the original's object (`Blobs/<previousSHA256>`) goes from
 iCloud once nothing can need it (docs/icloud-sync.md, "Superseded objects go from iCloud"). On `storage/icloud-cleanup`,
-built on `storage/voice-clips`.
+after its review, with `storage/voice-clips` (its clips synced with their conversations) merged in again.
 
-**The acknowledgement.** Compaction already has one (LibrarySyncCompaction.swift): a conversation's history is pruned
-only once every device seen in the last 30 days has acknowledged a state at or after its root, a device away longer
-holds nothing back, and nothing is pruned while every other device is away. The object goes only once no journal entry
-still here names it, so it waits for exactly that, and nothing new decides who has caught up.
+**What changed after review.** The first version waited only for compaction's acknowledgement, which covers history
+that exists. A new reference to the same bytes made while the object waited (an iPhone importing the same file, which
+skipped its upload and let its file go back to iCloud) wasn't covered. Now the compacting Mac announces each object in a
+synced notice (`Superseded/`), every device acknowledges it in its presence (`superseded`, feature `superseded-1`) and
+holds what its own library still names, and the object goes a full day after every device seen in the last 30 days
+acknowledged it without holding it. Every device treats a superseded original, and anything a notice lists or logs, as
+possibly gone: never the reason a file goes, never published by reference while listed, uploaded again by whoever holds
+its bytes when a live conversation names it and iCloud lacks it. Deletions are logged (in the notice too), and one named
+again is a warning. The deletion itself happens after the pass, under the library's lock, with everything asked again,
+voice profiles' holds included; the stamp is checked inside the coordinated delete; a failed delete is the report's
+error; a Trash conversation that can't be read keeps everything; the wait uses the continuous clock and the boot, as
+#103's clock guard does. #103's missing-copy repair works in a synced library again.
 
-**Verified.** Temporary sync folders standing in for iCloud (`SimulatedICloud`), no network:
-- `SupersededObjectsTests`: the object going a day after the iPhone has the copy and compaction pruned the history naming
-  it, and not a minute before, both devices syncing after with the iPhone's recording the copy; an iPhone that never saw
-  the replacement keeping it while seen in the last 30 days (also at 23 days), and not once it's been away longer while an
-  iPad has caught up; nothing going while every other device is away, before or after it was free; a device without
-  `compress-1` keeping it; the copy not reported uploaded keeping it, and a day after it is, it goes; no commit in iCloud
-  keeping it; a track named back at its original keeping it and forgetting its wait; a second conversation holding the same
-  bytes keeping it; a conversation in this Mac's Trash holding them keeping it, its history pruned; a deleted
-  conversation's recording, which no replacement names, left alone; the object written again during the wait starting it
-  over; a new engine after a quit resuming the wait, an object already gone with its wait remembered clearing without a
-  warning, and what's remembered lost starting the wait over; the iPhone's cached original going only through
-  `evictAudio`'s check, untouched by the object going; compaction proposing because a replaced original would come free,
-  with too little history otherwise.
-- `RecordingCompressionLibraryTests`: a copy iCloud holds isn't named back at its original when the copy's file is
-  missing, and nothing is named back while the library that synced isn't connected (the other tests of naming back still
-  pass: a copy that never reached iCloud is named back).
-- 12 mutations of the safety checks, each failing a test: a journal entry still naming the original, a track
-  in this Mac's Trash naming it, the copy reported uploaded, every recent device knowing compressed recordings, every
-  commit in iCloud, the day's wait, the wait starting over when the object is written again, a wait forgotten once the
-  object isn't free, compaction's guards (every other device away, the clock), a replaced original counting toward
-  compacting, and both conditions on naming a track back at its original.
-- unchanged: `RecordingCompressionLibraryTests` (42), `RecordingCompressionSyncTests` (4), `LibrarySyncCompactionTests` (16),
-  `LibrarySyncReplicaTests` (36), `LibrarySyncDeletionTests` (4), `LibrarySyncSealingTests` (48), `LibrarySyncTests` (26),
-  `VoiceClipLibraryTests` (14).
+**Verified.** Temporary sync folders standing in for iCloud (`SimulatedICloud`), no network, nothing near real iCloud:
+- `SupersededObjectsTests` (37): the object going a day after every device acknowledged its notice and not a minute
+  before, with the log in the notice and the iPhone counting it gone after; a device that hasn't caught up keeping it
+  while seen in the last 30 days (also at 23), not once it's away longer; nothing going while every other device is away,
+  before or after it was free; a device without `compress-1`, or without `superseded-1` (nothing listed), or with no
+  acknowledgement, keeping it; the notice not in iCloud keeping acknowledgements from counting; the copy not uploaded
+  keeping it, and in iCloud Drive one iCloud can't answer for; no commit in iCloud keeping it; a replaced original reason
+  enough to compact; a journal entry still naming it keeping it with compaction never pruning (the journal check alone);
+  a track named back keeping it and withdrawing it from the notice; two compressed recordings sharing an original both
+  having to pass, the log listing both copies; the Mac's Trash holding it; a Trash conversation that can't be read
+  keeping everything, here, and on the iPhone (which then acknowledges nothing); a deleted conversation's recording left
+  alone; the object written again starting the wait again; an object listed again needing every acknowledgement again;
+  an iPhone importing the same bytes after acknowledging holding it (the Mac lists it no more) and never letting its file
+  go, whatever its budget, after a relaunch too; a deletion on a stale view (the iPhone's entry and presence held back)
+  repaired by the iPhone uploading its bytes again, with the warning, and the Mac then applying the new conversation; an
+  iPhone not publishing by reference what a notice lists, then publishing once the hold has it withdrawn; an entry
+  arriving after the deletion uploaded again from a Mac's original still there, or warned about when there's none; only
+  the compacting Mac deleting, one that stops withdrawing its notice, the new one deleting; an encrypted library listing
+  and deleting nothing; a clock that jumps (within a boot, and across a restart) starting the wait again, and the
+  continuous clock having to say a day too; voice profiles holding it before the pass (and a conversation not judged),
+  and asked again right before deleting; what changed between the pass and the deletion (the object written again, an
+  entry arrived, the copy's file gone, a device holding it now, a track here naming it now) keeping it; a delete that
+  fails being the report's error, its log entry taken back, and done on a later pass; a stop resuming; what's remembered
+  lost starting the wait again, the log and the sequence coming back from the notice; the iPhone's cached original going
+  only through its verified path.
+- `SupersededOriginalsLibraryTests` (1): through the library, a single Mac's compressed recording a voiceprint learned
+  from after compressing keeping its original in iCloud while that voiceprint's clip isn't confirmed there, then, its
+  clip cut and uploaded, listed, acknowledged, and deleted by the library's own sync a day later.
+- `RecordingCompressionLibraryTests` (42): a missing copy pointed back at its original in a synced library, connected
+  with the copy in iCloud and the original's object gone (uploaded again on the next pass), and before connecting.
+- `VoiceClipLibraryTests` (34): a compressed recording moved keeping its clip current; the Move test without a stamp
+  change, the conversation left never naming the clip again; Undo of a move bringing the clip back; only the clip
+  accepted here confirming its source in iCloud; a stale clip not letting the sweep take another file of its speech.
+- `LibrarySyncVoiceClipTests` (15): the sealer keeping a superseded original of a conversation another device changed in
+  the pass, and of every conversation while new settings arrived in it.
+- `VoiceClipsTests` (21): a carried source found only when it's the only one; a record's ranges asking for more frames
+  than the original holds refused.
+- unchanged: LibrarySyncCompactionTests (16), LibrarySyncCompatibilityTests (8), LibrarySyncConvergenceTests (1),
+  LibrarySyncDeletionTests (4), LibrarySyncForksTests (2), LibrarySyncHistoryTests (3), LibrarySyncInboxTests (6),
+  LibrarySyncMigrationTests (7), LibrarySyncNewContainerTests (7), LibrarySyncPageTests (15), LibrarySyncPhotoTests (3),
+  LibrarySyncRelocationTests (2), LibrarySyncReplicaTests (36), LibrarySyncSealingTests (48), LibrarySyncStartOverTests
+  (5), LibrarySyncTests (26), RecordingCompressionSyncTests (4), RecordingCompressionTests (15), SyncPresenceRecordTests
+  (2), SyncWarningWordsTests (5).
+- MUTATIONS_LINE
 
-**Not testable on its own.** The copy must also be here and verified, but an eager Mac's complete pass puts back a copy that
-differs (measured: it keeps the changed one in `SyncConflicts` and installs iCloud's), so no complete pass finds it
-otherwise.
+**Not done as asked, and why.** An upload of a possibly gone object is still skipped when the object is in the sync
+folder: writing the same bytes over an object iCloud lists (often dataless) can't be checked without real iCloud, and
+wouldn't keep a later deletion from taking it. Instead the device holds it in its presence, never lets its file go, and
+uploads it again whenever it's missing.
 
-**Needs a real device.** iCloud itself: that a deleted `Blobs/` object frees the space in the account and goes from other
-devices' containers, that `ubiquitousItemIsUploaded` is true for the copy before the deletion, and how long an edit takes
-to reach another Mac (the day's wait is chosen to cover it).
+**Needs a real device.** iCloud itself: that a deleted `Blobs/` object frees the account's space and goes from other
+devices' containers; that `ubiquitousItemIsUploaded` is true for the copy and the notice before the deletion; how long a
+journal or presence write takes to reach the compacting Mac (the day after every acknowledgement is chosen to cover
+it); and that deleting a legacy `.icloud` placeholder deletes the item (macOS 15 is expected to use dataless files).
 
 ## Voice clips: carried with their recordings, never waited for, checked here (2026-11-21, second review)
 

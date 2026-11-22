@@ -474,15 +474,17 @@ extension LibraryController {
         return found
     }
 
-    /// A track this device compressed that names a copy no longer here, while its original still is (its bytes are
-    /// `previousSHA256`): it names the original again, so the recording is whole. Only this device's own compressions
-    /// (or any in a library that doesn't sync): another Mac's copy that hasn't downloaded yet is on its way. In a synced
-    /// library, only while it's connected and iCloud doesn't have the copy: a copy iCloud has is downloaded instead, and
-    /// its original's object may since have gone from iCloud (LibrarySyncSuperseded.swift), so it's never named again.
+    /// A track this device compressed that names a copy no longer here, while its original still is, hash-verified (its
+    /// bytes are `previousSHA256`): it names the original again, so the recording is whole, connected or not, and
+    /// whether or not iCloud has the copy. The original is the recording itself: a publication uploads it again when
+    /// iCloud no longer has it (its object may have gone, LibrarySyncSuperseded.swift), and the copy still wins a merge
+    /// with another device's state that names it, which brings the copy back here. Only this device's own compressions
+    /// (or any in a library that doesn't sync): another Mac's copy that hasn't downloaded yet is on its way.
     private func repairMissingCopies(store: MeetingStore) async {
         let state = compressionSync
-        guard state != .unknown else { return }
         let thisDevice = state == .local ? nil : sync?.deviceID
+        // A synced library whose device isn't known yet can't tell this device's compressions: they wait for a later launch.
+        guard state == .local || thisDevice != nil else { return }
         for meeting in meetings {
             for track in meeting.tracks {
                 guard let encoding = track.encoding, encoding.device == thisDevice || state == .local,
@@ -490,9 +492,6 @@ extension LibraryController {
                       let original = try? await store.audioURL(for: RecordingTrack(relativePath: encoding.previousRelativePath, fileName: ""), in: meeting.id),
                       SyncFilesProbe.isRegularFile(original),
                       (try? await AudioDigest.sha256(contentsOf: original)) == encoding.previousSHA256 else { continue }
-                if state == .connected {
-                    guard let engine = sync?.engine, await !engine.holdsObject(track.sha256) else { continue }
-                }
                 updateKeepingEditDate(meeting.id) { meeting in
                     guard let index = meeting.tracks.firstIndex(where: { $0.id == track.id }), meeting.tracks[index].encoding == encoding else { return }
                     RecordingCompression.File(relativePath: encoding.previousRelativePath, fileName: encoding.previousFileName,

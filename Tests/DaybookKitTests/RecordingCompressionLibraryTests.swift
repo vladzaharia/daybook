@@ -548,29 +548,38 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(before))
     }
 
-    /// A copy iCloud has is downloaded, never replaced by its original again: the original's object may have gone from
-    /// iCloud since (LibrarySyncSuperseded.swift). Nor is anything named again while a library that synced isn't connected.
-    func testBehaviorACopyICloudHasIsntPointedBackAtItsOriginal() async throws {
+    /// In a synced library too, a missing copy of this Mac's own points the track back at its original while the original
+    /// is here with its bytes: connected (whether or not iCloud has the copy) and before it's connected (at launch). The
+    /// original is the recording: the next pass uploads it again when iCloud no longer has it (its object may have gone,
+    /// LibrarySyncSuperseded.swift).
+    func testBehaviorAMissingCopyIsPointedBackInASyncedLibraryConnectedOrNot() async throws {
         let cloud = try cloudFolder()
         let library = try await self.library("Mac", cloud: cloud)
         let (id, before) = try await compressedAndUploaded(library)
         let copy = try XCTUnwrap(library.meeting(id)?.tracks.first)
-        let holds = await library.sync?.engine?.holdsObject(copy.sha256)
-        XCTAssertEqual(holds, true)
+        let uploaded = await library.sync?.engine?.isObjectUploaded(copy.sha256)
+        XCTAssertEqual(uploaded, true)
         try FileManager.default.removeItem(at: url(library, copy.relativePath, in: id))
+        // Its original's object went from iCloud meanwhile.
+        try FileManager.default.removeItem(at: cloud.appendingPathComponent("Blobs/\(before.sha256)"))
         await library.reconcileCompressions()
-        XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(copy))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url(library, before.relativePath, in: id).path), "the original stays as it was")
-        // Synced before, not connected now (its sync controller here, its folder not): nothing is named again, even what
-        // this device compressed.
+        XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(before))
+        await pass(library)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cloud.appendingPathComponent("Blobs/\(before.sha256)").path), "uploaded again")
+        // Synced before, not connected now (at launch, before sync connects): pointed back as well.
+        await library.compressRecordings([before.id], in: id, device: library.sync?.deviceID)
+        await pass(library)
+        let again = try XCTUnwrap(library.meeting(id)?.tracks.first)
+        XCTAssertNotNil(again.encoding)
+        try FileManager.default.removeItem(at: url(library, again.relativePath, in: id))
         await library.flush()
         let offline = try await self.library("Mac")
         XCTAssertEqual(offline.compressionSync, .unknown)
+        // (A test's defaults give the relaunched library another device ID; the app keeps its own.)
         offline.update(id) { $0.tracks[0].encoding?.device = offline.sync?.deviceID }
         try await offline.flushDurably()
         await offline.reconcileCompressions()
-        XCTAssertEqual(offline.meeting(id)?.tracks.first?.sha256, copy.sha256)
-        XCTAssertNotNil(offline.meeting(id)?.tracks.first?.encoding)
+        XCTAssertEqual(offline.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(before))
     }
 
     func testBehaviorAMissingCopyPointsTheTrackBackAtItsOriginal() async throws {

@@ -15,10 +15,7 @@ extension LibrarySyncEngine {
     /// folder that isn't iCloud's), a file that's there is.
     public func isObjectUploaded(_ sha256: String) -> Bool {
         guard SyncFiles.isHash(sha256) else { return false }
-        let object = remoteObject(sha256)
-        guard SyncFiles.itemState(object.url) != .absent else { return false }
-        if cloud.isICloudFolder(remoteRoot) { return cloud.uploadState(object.url) == true }
-        return cloud.isUploaded(object.url)
+        return uploadedStrictly(remoteObject(sha256).url)
     }
 
     /// Conversations whose superseded originals (`TrackEncoding.previousSHA256`) must stay in iCloud for voice profiles
@@ -36,10 +33,11 @@ extension LibrarySyncEngine {
 
     /// The sealer's live objects: `live`, with each held conversation's superseded originals (`holdOriginalsInICloud`),
     /// and those originals' digests (`optional`: one already gone everywhere never keeps the sealer from finishing).
-    func withOriginalsHeldForVoice(_ live: [UUID: [SyncAsset]], meetings: [UUID: Meeting]) -> (assets: [UUID: [SyncAsset]], optional: Set<String>) {
+    func withOriginalsHeldForVoice(_ live: [UUID: [SyncAsset]], meetings: [UUID: Meeting],
+                                   unjudged: Set<UUID> = []) -> (assets: [UUID: [SyncAsset]], optional: Set<String>) {
         var assets = live, optional = Set<String>()
         for (id, current) in live {
-            let held = originalsHeldForVoice.map { $0.held.contains(id) || !$0.judged.contains(id) } ?? true
+            let held = unjudged.contains(id) || (originalsHeldForVoice.map { $0.held.contains(id) || !$0.judged.contains(id) } ?? true)
             guard held, let meeting = meetings[id] else { continue }
             let superseded = meeting.tracks.compactMap { track -> SyncAsset? in
                 guard let encoding = track.encoding, SyncFiles.isHash(encoding.previousSHA256), encoding.previousRelativePath.hasPrefix("Originals/"),

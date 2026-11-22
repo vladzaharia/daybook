@@ -59,6 +59,17 @@ extension LibrarySyncEngine {
         (meeting.voiceClips ?? []).filter { $0.isStored(in: meeting.id) }.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) }
     }
 
+    /// The objects clip records this version can't read (a newer Daybook's shape) say they are, by their path and digest:
+    /// live for the sealer too, so a key rotation never retires a clip only a newer version reads (one that's nowhere never
+    /// keeps the sealer from finishing).
+    nonisolated func unreadVoiceClipAssets(of meeting: Meeting) -> [SyncAsset] {
+        (meeting.voiceClips ?? []).compactMap { clip in
+            guard let path = clip.unreadPath, case .object(let fields)? = clip.unread, case .string(let sha256)? = fields["sha256"],
+                  SyncFiles.isHash(sha256) else { return nil }
+            return SyncAsset(relativePath: path, sha256: sha256)
+        }
+    }
+
     /// A clip's asset: one that never holds its conversation back.
     nonisolated static func isVoiceClip(_ asset: SyncAsset) -> Bool { asset.relativePath.hasPrefix(VoiceClip.folder + "/") }
 

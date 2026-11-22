@@ -973,6 +973,12 @@ public final class LibraryController {
         editedDuringSync = []; settingsEditedDuringSync = false
         await acquireLock()
         var applied = await applyPass(sync, protecting: active, limits: limits, scope: scope)
+        // A superseded original's object the pass found due goes now, still under the lock, with the library's
+        // conversations and what voice profiles hold asked again (LibrarySyncSuperseded.swift).
+        if let engine = sync.engine, await engine.hasSupersededObjectsDue {
+            let held = await meetingsHoldingOriginalsInICloud()
+            await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held)
+        }
         releaseLock(); isApplyingSync = false
         applied?.editedDuringPass = editedDuringSync; applied?.settingsEditedDuringPass = settingsEditedDuringSync
         if !editedDuringSync.isEmpty || settingsEditedDuringSync { sync.requestSync() }
@@ -988,11 +994,15 @@ public final class LibraryController {
         var applied: SyncApplied?
         do {
             try Task.checkCancellation()
-            // In an encrypted library, the superseded originals voice profiles still need stay through the sealer's key
-            // rotations, by the rule that lets an original go (LibraryController+VoiceClips).
-            if let engine = sync.engine, await engine.sealsObjects {
-                let compressed = meetings.contains { $0.tracks.contains(where: \.isCompressed) }
-                await engine.holdOriginalsInICloud(for: compressed ? await meetingsHoldingOriginalsInICloud() : nil, judged: Set(meetings.map(\.id)))
+            // The superseded originals voice profiles still need stay in iCloud: through the sealer's key rotations in an
+            // encrypted library, and out of what the compacting Mac of a plaintext one lets go, by the rule that lets an
+            // original go (LibraryController+VoiceClips).
+            if let engine = sync.engine {
+                let seals = await engine.sealsObjects, deletes = await engine.mayDeleteSupersededObjects
+                if seals || deletes {
+                    let compressed = meetings.contains { $0.tracks.contains(where: \.isCompressed) }
+                    await engine.holdOriginalsInICloud(for: compressed ? await meetingsHoldingOriginalsInICloud() : nil, judged: Set(meetings.map(\.id)))
+                }
             }
             let snapshot = meetings
             let deleted = Set(trashedMeetingIDs())

@@ -145,6 +145,8 @@ public actor LibrarySyncEngine {
     var sealingRuntime = SealingRuntime()
     /// What compaction knows of the journal (`CompactionRuntime`).
     var compactionRuntime = CompactionRuntime()
+    /// What this device knows of superseded originals' objects (LibrarySyncSuperseded.swift).
+    var supersededRuntime = SupersededRuntime()
     /// Paths of the journal files this pass wrote, so it doesn't count them as remote changes.
     var ownJournalWrites: Set<String> = []
     /// Files written into the sync folder that no returned pass has reported yet (`SyncResult.writtenFiles`).
@@ -243,6 +245,9 @@ public actor LibrarySyncEngine {
     /// Compaction's clock (tests move it on).
     var compactionClock: @Sendable () -> Date = { Date() }
     func setCompactionClock(_ clock: @escaping @Sendable () -> Date) { compactionClock = clock }
+    /// The continuous clock superseded originals' waits are measured by too (tests move it on).
+    var continuousClock: @Sendable () -> SyncClockMark = { SyncClockMark.current() }
+    func setContinuousClock(_ clock: @escaping @Sendable () -> SyncClockMark) { continuousClock = clock }
     func setCompactionPolicy(_ policy: SyncCompactionPolicy?) { compactionPolicy = policy }
 
     /// `waitsForListing`: in the iCloud container, a library (`daybook-sync.json`) isn't created until
@@ -305,9 +310,14 @@ public actor LibrarySyncEngine {
         var pass = PassState(budget: SyncPassBudget(limits), warnings: warnings, pendingDownloads: compactionPending,
                              unreadJournalFiles: compactionPending)
         try readJournal(into: &pass)
+        // Compacting Macs' notices of superseded originals, and what this library knows may be gone from iCloud
+        // (LibrarySyncSuperseded.swift), before anything is published by reference.
+        readSupersededRecords()
+        notePossiblyGone(meetings)
         try publishLocalChanges(meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: libraryMetadata, into: &pass)
         try applyJournal(meetings, protecting: protecting, into: &pass)
         pass.localMeetings = meetings
+        repairSupersededObjects(meetings, into: &pass)
         return try finishPass(&pass)
     }
 
@@ -677,7 +687,18 @@ public actor LibrarySyncEngine {
             if pass.pendingDownloads == 0, pass.budget.deferred == 0, !journalIncomplete {
                 removeRetiredKeys(entries: pass.eventEntries + pass.metadataEntries, knownShas: namedAssets, now: sealerClock())
             }
-            let live = withOriginalsHeldForVoice(pass.liveAssets, meetings: pass.output)
+            // A conversation that changed in this pass, or any while new settings arrived (voiceprints among them), wasn't
+            // judged by the library's hold list, which it made before the pass.
+            let settingsChanged = Set(metadataHeads) != Set(state.metadataHeads)
+            var live = withOriginalsHeldForVoice(pass.liveAssets, meetings: pass.output,
+                                                 unjudged: settingsChanged ? Set(pass.output.keys) : pass.changed)
+            for (id, meeting) in pass.output {
+                guard let current = live.assets[id] else { continue }
+                let unread = unreadVoiceClipAssets(of: meeting).filter { !current.contains($0) }
+                guard !unread.isEmpty else { continue }
+                live.assets[id] = current + unread
+                live.optional.formUnion(unread.map(\.sha256))
+            }
             sealerProgress = runSealer(SealerInput(events: pass.events, metadata: pass.metadata,
                                                    eventEntries: pass.eventEntries.filter { !setAsideFromSealer($0) },
                                                    metadataEntries: pass.metadataEntries.filter { !setAsideFromSealer($0) },
@@ -693,11 +714,11 @@ public actor LibrarySyncEngine {
         // History no device needs any more goes (on the Mac that compacts, after a pass that read everything).
         if !Task.isCancelled {
             let complete = pass.pendingDownloads == 0 && pass.budget.deferred == 0 && !journalIncomplete && !pass.metadataIncomplete && pass.held.isEmpty
-            let superseded = supersededOriginals(pass.localMeetings, deleted: pass.deletes)
             runCompaction(CompactionInput(events: pass.events, metadata: pass.metadata, metadataHeads: metadataHeads,
                                           entries: (pass.eventEntries + pass.metadataEntries).filter { !sealingRuntime.replacedEntries.contains($0.path) },
-                                          deleted: pass.deletes, complete: complete, superseded: superseded.originals,
-                                          heldDigests: superseded.held), now: compactionClock())
+                                          deleted: pass.deletes, complete: complete, meetings: pass.localMeetings), now: compactionClock())
+        } else {
+            supersededRuntime.due = [:]
         }
         // A coordinated local write is not necessarily uploaded to iCloud yet; one iCloud refused for lack of storage won't be.
         let uploads = try countPendingCloudUploads()
@@ -714,6 +735,8 @@ public actor LibrarySyncEngine {
         // Presence says what's still to upload, and whether iCloud's storage is what holds it back.
         presenceUploads = pass.pendingUploads
         presenceStorageFull = uploads.storageFull
+        // What this device acknowledges of compacting Macs' notices, and holds (LibrarySyncSuperseded.swift).
+        noteSupersededAcks(pass.localMeetings)
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
         let written = takeCourierWrites()

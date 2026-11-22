@@ -106,9 +106,11 @@ extension LibraryController {
             _ = try? await moveToTrash(newID)
             throw error
         }
-        let carried = Self.carried(from: source, group: Set(group.map(\.id)), mapping: mapping)
+        // What the conversation holds now (a sync pass may have changed it while the files were read).
+        let current = meeting(id) ?? source
+        let carried = Self.carried(from: current, group: Set(group.map(\.id)), mapping: mapping)
         // Voiceprints still name the conversation the recording left: its clips are carried from there, on the copy.
-        let clips = (meeting(id) ?? source).voiceClipsCarried(mapping)
+        let clips = current.voiceClipsCarried(mapping)
         update(newID) { meeting in
             for original in group {
                 guard let copyID = mapping[original.id], let index = meeting.tracks.firstIndex(where: { $0.id == copyID }) else { continue }
@@ -123,6 +125,9 @@ extension LibraryController {
                 meeting.tracks[index].derivedFrom = original.derivedFrom.flatMap { mapping[$0] }
                 meeting.tracks[index].processing = original.processing
                 meeting.tracks[index].offset = original.derivedFrom == nil ? 0 : nil
+                // A compressed recording is still known by its original's bytes (as a merge keeps it), so its voice clip,
+                // cut from that original, is still current.
+                meeting.tracks[index].encoding = original.encoding
             }
             meeting.transcripts = carried.transcripts
             meeting.speakers = carried.speakers
@@ -139,6 +144,7 @@ extension LibraryController {
             if !clips.isEmpty { meeting.voiceClips = clips.sorted { $0.id < $1.id } }
         }
         let words = RecordingWords.inSentence(track, in: source, phoneName: phoneName)
+        var left: [VoiceClip] = []
         update(id) { meeting in
             for index in meeting.tracks.indices where mapping[meeting.tracks[index].id] != nil {
                 meeting.tracks[index].removal = RecordingRemoval(removedAt: now, movedTo: newID)
@@ -147,6 +153,7 @@ extension LibraryController {
             let moved = Set(clips.map(\.id))
             if meeting.voiceClipsAreReadable, let named = meeting.voiceClips {
                 let kept = named.filter { clip in clip.unread != nil || !moved.contains(clip.carried(from: meeting.id, to: clip.trackID).id) }
+                left = named.filter { clip in !kept.contains(clip) }
                 meeting.voiceClips = kept.isEmpty ? nil : kept
             }
             meeting.revisions.append(MeetingRevision(date: now, field: "source:\(trackID.uuidString):moved", oldValue: "",
@@ -157,9 +164,9 @@ extension LibraryController {
         recordingsChanged(id, changed)
         // Its own conversation is summarized where the one it left was.
         recordingsChanged(newID, hadSummary: source.summary != nil, changed)
-        undoManager?.registerUndo(withTarget: self) { controller in
+        undoManager?.registerUndo(withTarget: self) { [left] controller in
             Task {
-                await controller.takeBackMove(trackID, from: id, to: newID)
+                await controller.takeBackMove(trackID, from: id, to: newID, clips: left)
                 controller.recordingsChanged(id, changed)
             }
         }
@@ -167,14 +174,20 @@ extension LibraryController {
         return newID
     }
 
-    /// Undoes a move: the recording is back where it was, and the conversation made for it goes to the Trash.
-    func takeBackMove(_ trackID: UUID, from id: UUID, to newID: UUID, at now: Date = Date()) async {
+    /// Undoes a move: the recording is back where it was with the voice clips that went with it (`clips`, as this
+    /// conversation named them), and the conversation made for it goes to the Trash.
+    func takeBackMove(_ trackID: UUID, from id: UUID, to newID: UUID, clips: [VoiceClip] = [], at now: Date = Date()) async {
         guard let meeting = meeting(id), let track = meeting.tracks.first(where: { $0.id == trackID }) else { return }
         let group = meeting.recordingGroup(of: trackID).map(\.id)
         let words = RecordingWords.inSentence(track, in: meeting)
         update(id) { meeting in
             for index in meeting.tracks.indices where group.contains(meeting.tracks[index].id) && meeting.tracks[index].removal?.movedTo == newID {
                 meeting.tracks[index].removal = nil
+            }
+            if meeting.voiceClipsAreReadable {
+                let named = Set((meeting.voiceClips ?? []).map { $0.source(in: meeting.id).key })
+                let back = clips.filter { !named.contains($0.source(in: meeting.id).key) }
+                if !back.isEmpty { meeting.voiceClips = ((meeting.voiceClips ?? []) + back).sorted { $0.id < $1.id } }
             }
             meeting.revisions.append(MeetingRevision(date: now, field: "source:\(trackID.uuidString):put-back", oldValue: "",
                                                      newValue: "Put back \(words)"))

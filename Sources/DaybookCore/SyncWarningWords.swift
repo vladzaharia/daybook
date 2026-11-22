@@ -12,8 +12,11 @@ public enum SyncWarningWords {
     public static let damagedHistory = "Part of the library’s history in iCloud is damaged and was skipped"
     /// A recording here that differed from the copy sync installed: both are kept, where behind Details.
     public static let keptBothRecordings = "A recording here differed from its copy in iCloud, so both are kept"
+    /// A replaced recording's original, deleted from iCloud, that a conversation names again (LibrarySyncSuperseded.swift).
+    public static let deletedOriginalNeeded = "A recording’s original was deleted from iCloud and is needed again"
 
-    static let heads = [unreadHistory, unsavedChange, unappliedConversation, undownloadedHistory, damagedHistory, keptBothRecordings]
+    static let heads = [unreadHistory, unsavedChange, unappliedConversation, undownloadedHistory, damagedHistory, keptBothRecordings,
+                        deletedOriginalNeeded]
 
     /// "<head>: <the system's words>", or the error alone when it's one of Daybook's plain sentences.
     public static func compose(_ head: String, _ error: Error) -> String {

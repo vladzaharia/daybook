@@ -45,6 +45,9 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// A random ID for the app that wrote it, on this device. Two apps sharing the device's identity through the keychain
     /// (the iPhone app kept beside the one that replaced it) write the same `installation` and differ here. Additive.
     var appInstallation: String?
+    /// What it acknowledges of compacting Macs' notices of superseded originals, and the objects listed there it holds
+    /// (LibrarySyncSuperseded.swift). Additive: earlier versions write none, and acknowledge nothing.
+    var superseded: [SupersededAck]?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -54,7 +57,7 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
-        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem
+        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem, superseded
     }
 
     init(from decoder: Decoder) throws {
@@ -79,6 +82,7 @@ struct SyncDeviceRecord: Codable, Equatable {
         appInstallation = (try? values.decodeIfPresent(String.self, forKey: .appInstallation)) ?? nil
         pendingUploads = (try? values.decodeIfPresent(Int.self, forKey: .pendingUploads)).flatMap { $0.map { max(0, $0) } }
         problem = (try? values.decodeIfPresent(SyncPresenceProblem.self, forKey: .problem)) ?? nil
+        superseded = (try? values.decodeIfPresent([SupersededAck].self, forKey: .superseded)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -157,12 +161,13 @@ extension LibrarySyncEngine {
         var record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                       canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation,
                                       activity: stamped)
-        record.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature]
+        record.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature, Self.supersededFeature]
         record.compaction = state.compactionAck
         record.capabilities = device.capabilities
         record.appInstallation = appInstallation
         record.pendingUploads = presenceUploads
         record.problem = presenceProblem ?? (presenceStorageFull ? .storageFull : nil)
+        record.superseded = supersededRuntime.acks
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
@@ -249,7 +254,7 @@ extension LibrarySyncEngine {
             var known = KnownSyncDevice(id: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                         canProcess: device.canProcess, audioPolicy: audioPolicy,
                                         lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity)
-            known.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature]
+            known.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature, Self.supersededFeature]
             known.capabilities = device.capabilities
             known.keyState = sealing.map { SyncDeviceKeyState(state: .ready, id: $0.current.idHex) }
                 ?? waitingForKey.map { SyncDeviceKeyState(state: .waiting, id: $0) }

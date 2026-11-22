@@ -165,6 +165,18 @@ final class VoiceClipsTests: XCTestCase {
         XCTAssertFalse(source.isNamed(by: print(profile, meeting([("s1", 0, 10)]))))
     }
 
+    /// A voiceprint naming no recording, whose conversation is gone, finds its source through a carried clip only when
+    /// one carried source can be it: two recordings' clips of that speaker carried from there can't be told apart.
+    func testBehaviorACarriedSourceIsFoundOnlyWhenItsTheOnlyOne() {
+        let conversation = meeting([("s1", 0, 10)])
+        let voiceprint = print(UUID(), conversation, trackID: .some(nil))
+        let one = VoiceClipSource(meetingID: conversation.id, trackID: UUID(), speakerID: "s1")
+        let other = VoiceClipSource(meetingID: conversation.id, trackID: UUID(), speakerID: "s1")
+        XCTAssertEqual(VoiceClips.source(of: voiceprint, in: nil, carried: [one]), one)
+        XCTAssertEqual(VoiceClips.source(of: voiceprint, in: nil, carried: [one, one]), one, "the same source carried twice is one")
+        XCTAssertNil(VoiceClips.source(of: voiceprint, in: nil, carried: [one, other]))
+    }
+
     // MARK: A conversation's clips
 
     private func clip(_ meeting: Meeting, speaker: String = "s1", sha: Character = "c", at date: Date? = nil, rate: Double = 16_000,
@@ -430,6 +442,15 @@ final class VoiceClipsTests: XCTestCase {
             do {
                 _ = try await VoiceClipAudio.extract(from: original, ranges: [VoiceClipRange(startFrame: 0, endFrame: 48_000 * 7)], into: root)
                 XCTFail("past the end")
+            } catch let failure as VoiceClipAudio.Failure {
+                XCTAssertEqual(failure, .nothingToCut)
+            }
+            // Nor more frames than the original holds, each range within it (a record from elsewhere asking for the
+            // same stretch over and over).
+            let whole = VoiceClipRange(startFrame: 0, endFrame: 48_000 * 6)
+            do {
+                _ = try await VoiceClipAudio.extract(from: original, ranges: [whole, whole], into: root)
+                XCTFail("more than the original holds")
             } catch let failure as VoiceClipAudio.Failure {
                 XCTAssertEqual(failure, .nothingToCut)
             }

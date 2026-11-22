@@ -124,10 +124,9 @@ struct CompactionInput {
     var deleted: Set<UUID>
     /// The whole journal was read: nothing pending, deferred, or unreadable.
     var complete: Bool
-    /// Recordings this device's library holds as compressed copies, with the originals they replaced, and every SHA-256 a
-    /// track here holds as its file (LibrarySyncSuperseded.swift).
-    var superseded: [SupersededOriginal] = []
-    var heldDigests: Set<String> = []
+    /// The conversations the library supplied to the pass (what superseded originals are judged by,
+    /// LibrarySyncSuperseded.swift).
+    var meetings: [Meeting] = []
 }
 
 extension LibrarySyncEngine {
@@ -253,18 +252,33 @@ extension LibrarySyncEngine {
     /// One run of compaction, at the end of a pass, on the compacting Mac. Best effort: what fails is tried again later.
     func runCompaction(_ input: CompactionInput, now: Date) {
         guard let policy = compactionPolicy, audioPolicy == .eager, device?.deviceClass == .mac, libraryID != nil,
-              input.complete, compactionRuntime.readComplete, journalCache.unreadable.isEmpty else { return }
-        // A run dated after now was by a clock that was ahead, since set right: it doesn't hold compaction back.
-        if let last = compactionRuntime.lastRun, last <= now, now.timeIntervalSince(last) < policy.interval { return }
+              input.complete, compactionRuntime.readComplete, journalCache.unreadable.isEmpty else { supersededRuntime.due = [:]; return }
         // Every device seen lately reads a compacted library, and this is the Mac to compact it.
-        guard let others = recentPresence(now: now), others.allSatisfy({ ($0.features ?? []).contains(Self.compactionFeature) }) else { return }
+        guard let others = recentPresence(now: now), others.allSatisfy({ ($0.features ?? []).contains(Self.compactionFeature) }) else {
+            supersededRuntime.due = [:]; return
+        }
         let candidates = others.filter { record in
             record.deviceClass == .mac && sealing.map { record.key == SyncDeviceKeyState(state: .ready, id: $0.current.idHex) } ?? true
         }
         // An earlier identity of a reinstalled device never syncs again: it isn't the one to compact. (It still has to
         // acknowledge: a device with the same name that's merely away may come back.)
         let superseded = Set(((try? knownDevices(now: now)) ?? []).filter { $0.supersededBy != nil }.map(\.id))
-        guard (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() == deviceID else { return }
+        guard (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() == deviceID else {
+            withdrawSupersededNotice(now: now); return
+        }
+        // Conversations' history, once every device seen lately has acknowledged the proposal. With no other device
+        // seen lately while another has written presence that isn't superseded or six months old (all away for a while,
+        // or this Mac's clock running a month or more ahead), every acknowledgement would pass for want of anyone to
+        // give one: nothing of a conversation goes until another device is seen.
+        let dormant = others.isEmpty && (allPresence(now: now).map { records in records.contains { !superseded.contains($0.deviceID) } } ?? true)
+        // A clock more than a week ahead makes devices in use look away, or gone: nothing of a conversation goes either.
+        let ahead = clockLooksAhead(now: now)
+        // A run dated after now was by a clock that was ahead, since set right: it doesn't hold compaction back.
+        if let last = compactionRuntime.lastRun, last <= now, now.timeIntervalSince(last) < policy.interval {
+            // Superseded originals' objects are followed on every such pass, not only when compaction runs.
+            if !dormant, !ahead { runSupersededObjects(input, others: others, now: now) } else { supersededRuntime.due = [:] }
+            return
+        }
         compactionRuntime.lastRun = now
         var report = CompactionReport()
         // What earlier commits pruned that's still here.
@@ -273,13 +287,6 @@ extension LibrarySyncEngine {
 
         // What can go now: settings versions that aren't heads.
         var prunable = Set(input.metadata.keys).subtracting(input.metadataHeads)
-        // Conversations' history, once every device seen lately has acknowledged the proposal. With no other device
-        // seen lately while another has written presence that isn't superseded or six months old (all away for a while,
-        // or this Mac's clock running a month or more ahead), every acknowledgement would pass for want of anyone to
-        // give one: nothing of a conversation goes until another device is seen.
-        let dormant = others.isEmpty && (allPresence(now: now).map { records in records.contains { !superseded.contains($0.deviceID) } } ?? true)
-        // A clock more than a week ahead makes devices in use look away, or gone: nothing of a conversation goes either.
-        let ahead = clockLooksAhead(now: now)
         var executed: String?
         if let proposal = compactionRuntime.pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id, !dormant, !ahead,
            others.allSatisfy({ $0.compaction == proposal.id }) {
@@ -313,8 +320,8 @@ extension LibrarySyncEngine {
                 Self.log.error("Compaction couldn’t commit (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
             }
         }
-        // A superseded original's object, once nothing can need it.
-        if !dormant, !ahead { deleteSupersededObjects(input, others: others, now: now, report: &report) }
+        // Superseded originals' objects: which are free to go, announced, acknowledged, and due (deleted after the pass).
+        if !dormant, !ahead { runSupersededObjects(input, others: others, now: now) } else { supersededRuntime.due = [:] }
         tidyCompactionRecords(policy, now: now, report: &report)
         if compactionRuntime.pendingProposal == nil || proposalIsStale(input, now: now) {
             let stale = compactionRuntime.pendingProposal
@@ -386,7 +393,7 @@ extension LibrarySyncEngine {
     /// Deletes pruned entries still in the sync folder, once every commit is in iCloud: a device that finds one gone then
     /// finds the commit that says why (or waits for it, never for the entry).
     func deletePrunedFiles(_ entries: [JournalEntry], report: inout CompactionReport) {
-        guard compactionRuntime.records.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) else { return }
+        guard compactionRuntime.records.values.filter(\.record.isCommit).allSatisfy({ uploadedStrictly($0.url) }) else { return }
         for entry in entries {
             guard let id = entry.isSealed ? sealingRuntime.sealedNames[entry.path] : entry.name, compactionRuntime.prunedIDs.contains(id),
                   SyncFiles.itemState(entry.url) != .absent else { continue }
@@ -450,7 +457,7 @@ extension LibrarySyncEngine {
     private func tidyCompactionRecords(_ policy: SyncCompactionPolicy, now: Date, report: inout CompactionReport) {
         let records = Array(compactionRuntime.records.values)
         let commits = records.filter(\.record.isCommit)
-        guard commits.allSatisfy({ cloud.isUploaded($0.url) }) else { return }
+        guard commits.allSatisfy({ uploadedStrictly($0.url) }) else { return }
         let executed = Set(commits.compactMap(\.record.proposal))
         func readable(_ entry: CompactionEntry) -> Bool {
             guard let sealing else { return true }
@@ -460,14 +467,14 @@ extension LibrarySyncEngine {
             if executed.contains(entry.id) || (compactionRuntime.pendingProposal.map { $0.id != entry.id } ?? true) {
                 removeCompactionRecord(entry)
             } else if !readable(entry), let bytes = try? readEntry(entry.entry, kind: .compaction).bytes,
-                      let moved = try? writeCompactionBytes(bytes, record: entry.record), moved.path != entry.path, cloud.isUploaded(moved.url) {
+                      let moved = try? writeCompactionBytes(bytes, record: entry.record), moved.path != entry.path, uploadedStrictly(moved.url) {
                 removeCompactionRecord(entry)
             }
         }
         let current = compactionRuntime.records.values.filter(\.record.isCommit)
         guard current.count > policy.maximumCommits || current.contains(where: { !readable($0) }) else { return }
         guard let merged = try? writeCompactionRecord(SyncCompactionRecord(deviceID: deviceID, createdAt: now, pruned: compactionRuntime.prunedIDs.sorted())),
-              cloud.isUploaded(merged.url) else { return }
+              uploadedStrictly(merged.url) else { return }
         for entry in current where entry.path != merged.path { removeCompactionRecord(entry) }
         report.consolidated = true
     }

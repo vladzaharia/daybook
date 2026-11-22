@@ -151,11 +151,16 @@ extension LibraryController {
     /// an original go asks. Empty while this Mac's record can't be read.
     func clipsHeldAndCurrent(requiringCheck: Bool = false) -> Set<String> {
         guard let state = voiceClipState() else { return [] }
-        return Set(heldVoiceClips(state).filter { meeting, clip in
+        return Set(heldCurrentClips(state, requiringCheck: requiringCheck).map { $0.clip.source(in: $0.meeting.id).key })
+    }
+
+    /// The clips `clipsHeldAndCurrent` accepts, themselves: what's confirmed in iCloud is these clips' objects.
+    func heldCurrentClips(_ state: VoiceClipState, requiringCheck: Bool) -> [(meeting: Meeting, clip: VoiceClip)] {
+        heldVoiceClips(state).filter { meeting, clip in
             guard meeting.voiceClipIsCurrent(clip) else { return false }
             let check = Self.checked(state, meeting.id, clip)
             return requiringCheck ? check == true : check != false
-        }.map { $0.clip.source(in: $0.meeting.id).key })
+        }
     }
 
     /// Whether clips may be relied on here at all: always in a library that doesn't sync; in a synced one, only while
@@ -176,30 +181,34 @@ extension LibraryController {
         return clipsHeldAndCurrent()
     }
 
-    /// Of `covered`, the sources whose clip's object iCloud holds and reports uploaded (in a library that doesn't sync,
-    /// all of them: nothing in iCloud to wait for).
-    private func inCloud(_ covered: Set<String>) async -> Set<String> {
+    /// The sources of `clips` (each one held here whole, current, and matched against this Mac's own original) whose
+    /// own object iCloud holds and reports uploaded: the very clip accepted here, not another of the same source (in a
+    /// library that doesn't sync, all of them: nothing in iCloud to wait for).
+    private func inCloud(_ clips: [(meeting: Meeting, clip: VoiceClip)]) async -> Set<String> {
+        let keys = clips.map { $0.clip.source(in: $0.meeting.id).key }
         switch compressionSync {
-        case .local: return covered
+        case .local: return Set(keys)
         case .unknown: return []
         case .connected:
             guard let engine = sync?.engine else { return [] }
             var confirmed = Set<String>()
-            for meeting in meetings {
-                for clip in meeting.voiceClips ?? [] where clip.unread == nil {
-                    let key = clip.source(in: meeting.id).key
-                    if covered.contains(key), !confirmed.contains(key), await engine.isObjectUploaded(clip.sha256) { confirmed.insert(key) }
-                }
-            }
+            for (key, held) in zip(keys, clips) where await engine.isObjectUploaded(held.clip.sha256) { confirmed.insert(key) }
             return confirmed
         }
     }
 
+    /// The clips that may confirm a source in iCloud: held here whole and current, and matched against this Mac's own
+    /// original (or cut here). Empty while this Mac's record can't be read.
+    private func clipsForCloud() -> [(meeting: Meeting, clip: VoiceClip)] {
+        guard let state = voiceClipState() else { return [] }
+        return heldCurrentClips(state, requiringCheck: true)
+    }
+
     /// Sources (by key) whose clip is covered on this Mac, matched against this Mac's own original (or cut here), and
-    /// confirmed in iCloud: its object is there and uploaded. Only these let an original go, here or from iCloud.
+    /// confirmed in iCloud: that clip's object is there and uploaded. Only these let an original go, here or from iCloud.
     public func voiceSourcesConfirmedInCloud() async -> Set<String> {
         guard await voiceClipsMayBeReliedOn() else { return [] }
-        return await inCloud(clipsHeldAndCurrent(requiringCheck: true))
+        return await inCloud(clipsForCloud())
     }
 
     /// The voiceprints that hold their recordings back now (`VoiceClips.holdingBack`): what a compression pass gives
@@ -230,7 +239,7 @@ extension LibraryController {
     /// to compare once more with nothing awaited.
     func voiceProtectedMeetings(lineage: [Meeting], requiringUpload: Bool = false) async -> (meetings: Set<UUID>, mark: VoiceProtectionMark) {
         let reliedOn = await voiceClipsMayBeReliedOn()
-        let inCloud = requiringUpload ? await inCloud(reliedOn ? clipsHeldAndCurrent(requiringCheck: true) : []) : nil
+        let inCloud = requiringUpload ? await inCloud(reliedOn ? clipsForCloud() : []) : nil
         var covered = reliedOn ? clipsHeldAndCurrent(requiringCheck: requiringUpload) : []
         if let inCloud { covered.formIntersection(inCloud) }
         let holding = VoiceClips.holdingBack(metadata: metadata, meetings: meetings, covered: covered)
@@ -243,7 +252,9 @@ extension LibraryController {
     /// the Trash included. What the sealer keeps through key rotations (`LibrarySyncEngine.holdOriginalsInICloud`) and
     /// what cleaning superseded originals out of iCloud leaves alone (docs/icloud-sync.md, "Voice clips").
     public func meetingsHoldingOriginalsInICloud() async -> Set<UUID> {
-        await voiceProtectedMeetings(lineage: await trashedMeetings(), requiringUpload: true).meetings
+        // The Trash is read only when a voiceprint holds a recording back at all.
+        guard await !voiceProtectedMeetings(lineage: [], requiringUpload: true).mark.holding.isEmpty else { return [] }
+        return await voiceProtectedMeetings(lineage: await trashedMeetings(), requiringUpload: true).meetings
     }
 
     /// Nothing voice protection depends on changed since `mark` was taken.
@@ -634,13 +645,16 @@ extension LibraryController {
     /// recording it was cut from, and the record is at the path its source and digest give there.
     private func adoptions(_ state: VoiceClipState, plan: VoiceClips.Plan) -> [UUID: [VoiceClip]] {
         var found: [UUID: [VoiceClip]] = [:]
+        // A source a conversation names a clip of, wherever (one carried away by Move to New Conversation or a merge): the
+        // record its old conversation kept isn't named again there.
+        let named = Set(meetings.flatMap { meeting in (meeting.voiceClips ?? []).filter { $0.unread == nil }.map { $0.source(in: meeting.id).key } })
         for meeting in meetings where meeting.voiceClipsAreReadable {
             let prefix = meeting.id.uuidString + "/"
-            let named = Set((meeting.voiceClips ?? []).map(\.relativePath))
+            let paths = Set((meeting.voiceClips ?? []).map(\.relativePath))
             for (key, verified) in state.verified where key.hasPrefix(prefix) {
-                guard let record = verified.record, record.unread == nil, record.sha256 == verified.sha256, !named.contains(record.relativePath),
+                guard let record = verified.record, record.unread == nil, record.sha256 == verified.sha256, !paths.contains(record.relativePath),
                       record.isStored(in: meeting.id), let url = record.fileURL(in: meeting.id, root: rootURL), Self.stamp(url) == verified.stamp,
-                      meeting.voiceClip(for: record.source(in: meeting.id)) == nil,
+                      !named.contains(record.source(in: meeting.id).key),
                       !(found[meeting.id] ?? []).contains(where: { $0.source(in: meeting.id) == record.source(in: meeting.id) }),
                       let track = meeting.tracks.first(where: { $0.id == record.trackID }),
                       record.originalSHA256 == track.sha256 || record.originalSHA256 == track.encoding?.previousSHA256,
@@ -653,8 +667,8 @@ extension LibraryController {
 
     /// Files in the library's conversations' `Originals/VoiceClips/` that no clip names (`reconcileVoiceClips`).
     private func sweepUnnamedVoiceClips(state: inout VoiceClipState, now: Date, deleting: Bool, plan: VoiceClips.Plan) async {
-        // Sources a clip this Mac holds whole covers, in whichever conversation names it.
-        let held = Set(heldVoiceClips(state).map { $0.clip.source(in: $0.meeting.id).key })
+        // Sources a clip this Mac holds whole and current covers, in whichever conversation names it.
+        let held = Set(heldCurrentClips(state, requiringCheck: false).map { $0.clip.source(in: $0.meeting.id).key })
         for meeting in meetings {
             let folder = rootURL.appendingPathComponent("Meetings/\(meeting.id.uuidString)/\(VoiceClip.folder)", isDirectory: true)
             guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path), !names.isEmpty else { continue }
