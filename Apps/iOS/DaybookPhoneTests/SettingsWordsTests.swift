@@ -14,21 +14,21 @@ final class SettingsWordsTests: XCTestCase {
 
     func testTheMacsFooterSaysOnlyWhatTheRowsDont() {
         let paired = ["Studio Mac"]
-        XCTAssertNil(MacsSection.footer(.connected(name: "Studio Mac"), pairedNames: paired), "its row says it's connected")
-        XCTAssertNil(MacsSection.footer(.seen(name: "Studio Mac", lastSeen: now), pairedNames: paired, now: now),
+        XCTAssertNil(DevicesSection.footer(.connected(name: "Studio Mac"), pairedNames: paired), "its row says it's connected")
+        XCTAssertNil(DevicesSection.footer(.seen(name: "Studio Mac", lastSeen: now), pairedNames: paired, now: now),
                      "a paired Mac is its row")
-        XCTAssertNil(MacsSection.footer(.checking, pairedNames: paired), "no filler while checking")
-        XCTAssertNil(MacsSection.footer(.unavailable("Sign in to iCloud to sync your library."), pairedNames: paired),
+        XCTAssertNil(DevicesSection.footer(.checking, pairedNames: paired), "no filler while checking")
+        XCTAssertNil(DevicesSection.footer(.unavailable("Sign in to iCloud to sync your library."), pairedNames: paired),
                      "iCloud's row says why")
 
         // A Mac that syncs the library but isn't paired here has no row, so the footer names it.
         // A sentence like the footer's others, dated as every row is.
-        XCTAssertEqual(MacsSection.footer(.seen(name: "Office iMac", lastSeen: now.addingTimeInterval(-7_200)),
+        XCTAssertEqual(DevicesSection.footer(.seen(name: "Office iMac", lastSeen: now.addingTimeInterval(-7_200)),
                                           pairedNames: paired, now: now),
                        "Office iMac was last seen \(DeviceDateFormat.lastSeen(now.addingTimeInterval(-7_200), now: now)).")
         // Something to do is always said.
-        XCTAssertEqual(MacsSection.footer(.noMac, pairedNames: []), "No Mac has synced this library yet. Open Daybook on your Mac.")
-        XCTAssertEqual(MacsSection.footer(.notProcessing(name: "Studio Mac", lastSeen: now), pairedNames: paired, now: now),
+        XCTAssertEqual(DevicesSection.footer(.noMac, pairedNames: []), "No Mac has synced this library yet. Open Daybook on your Mac.")
+        XCTAssertEqual(DevicesSection.footer(.notProcessing(name: "Studio Mac", lastSeen: now), pairedNames: paired, now: now),
                        "Studio Mac isn’t set up to transcribe. Finish in Daybook › Settings on Studio Mac.")
     }
 

@@ -168,9 +168,9 @@ struct StatusSheetHost: ViewModifier {
     let compact = PresentationDetent.height(compactHeight)
     content
       .environment(\.showStatus, ShowStatusAction { show($0) })
-      // The list leaves the minimized sheet's room free above the home indicator (34 pt, which the list's own inset
-      // has).
-      .environment(\.statusSheetInset, stands ? max(0, compactHeight - 34) : nil)
+      // The list leaves the minimized sheet's whole room free, the home indicator's 34 pt included, and the page paints
+      // paper in the gap the floating sheet leaves under itself (`LibraryPage.foot`).
+      .environment(\.statusSheetInset, stands ? compactHeight : nil)
       .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { windowHeight = $0 }
       .sheet(isPresented: Binding(get: { stands }, set: { _ in })) {
         StatusSheetView(request: state.asked, detent: $state.size, standing: true)

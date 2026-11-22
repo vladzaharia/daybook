@@ -450,7 +450,7 @@ everywhere. A recorder that was already recording when the conversation began re
 left running, as before.
 
 **Permission.** A Mac may start an iPhone's microphone from the moment it's paired: the per-Mac
-choice from the security review (Settings › Macs › <Mac> › Can Start Recording) stays, visible and
+choice from the security review (Settings › Devices › <Mac> › Can Start Recording) stays, visible and
 switchable, but starts on, and the pairing sheet no longer asks. Turned off, a Mac's start is declined
 with the reason as before. A choice belongs to one pairing; pairing again turns it on again.
 
@@ -844,7 +844,7 @@ that step; a later, better model may offer again.
 | Record along with this Mac | On, for recorders with record control | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
 | Can start recording (per iPhone, on the Mac) | On: the phone may start a recording on this Mac (on its own, by the person's choice, or from its page) and stop one from its page. One way only: whether the phone records when this Mac starts is its own Can Start Recording's to say | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); the phone's page and Settings › Devices |
 | Record Along (per recorder, on the iPhone's recorder page) | On, for a recorder with record control the iPhone manages: whether it records along with the phone, its button starts the phone, and the phone holds its link for that | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); the recorder's page |
-| Can Start Recording (per Mac, on the iPhone) | On when the Mac is paired: the Mac may start a recording here and stop one from its page. Off once for a Mac whose Record along with this Mac was off before (`takeMacOff`) | `PhoneSettings.macMayStartRecording`; Settings › Macs › <Mac> |
+| Can Start Recording (per Mac, on the iPhone) | On when the Mac is paired: the Mac may start a recording here and stop one from its page. Off once for a Mac whose Record along with this Mac was off before (`takeMacOff`) | `PhoneSettings.macMayStartRecording`; Settings › Devices › <Mac> |
 | Add imported files to conversations they overlap | Off | `matchesImportedFilesToConversations`; Settings › General |
 
 ## Limits and what needs a recorder
