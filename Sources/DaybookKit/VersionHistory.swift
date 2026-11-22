@@ -104,6 +104,28 @@ public enum RevisionText {
         }
     }
 
+    /// What changes of one kind have in common, for merging them in a list; nil for a change that is never merged.
+    public static func mergeKey(_ revision: MeetingRevision) -> String? {
+        switch revision.kind {
+        case .photo: return "photo:\(revision.newValue)"
+        case .page: return "page:\(revision.newValue)"
+        default: return nil
+        }
+    }
+
+    /// A row's title: the change's own, or for several, how many ("2 Photos added").
+    public static func title(_ revision: MeetingRevision, count: Int, in meeting: Meeting) -> String {
+        guard count > 1 else { return title(revision, in: meeting) }
+        let noun: String
+        switch revision.kind {
+        case .photo: noun = "Photos"
+        case .page: noun = "Pages"
+        default: return title(revision, in: meeting)
+        }
+        let what = title(revision, in: meeting).split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+        return "\(count) \(noun) \(what)"
+    }
+
     /// Whether there was text before the change to show. A conversation's first summary was
     /// written, not replaced: it shows on its own, with no empty Before (and nothing to restore).
     public static func hasBefore(_ revision: MeetingRevision) -> Bool {
@@ -301,6 +323,40 @@ public enum VersionHistoryList {
         for revision in revisions.reversed() {
             let day = DateGroup.title(for: revision.date, now: now, calendar: calendar)
             if result.last?.day == day { result[result.count - 1].revisions.append(revision) } else { result.append((day, [revision])) }
+        }
+        return result
+    }
+
+    /// A row of the Mac's list: a change, or several of one kind a moment apart. It stands for its newest change.
+    public struct Entry: Identifiable, Equatable, Sendable {
+        public let revision: MeetingRevision
+        /// How many changes it stands for; 1 for a change on its own.
+        public let count: Int
+        public var id: MeetingRevision.ID { revision.id }
+    }
+
+    /// Changes of one kind (photos added, pages deleted) less than this apart read as one row.
+    public static let mergeWindow: TimeInterval = 60
+
+    /// `days`, with consecutive changes of one kind within a minute of each other merged into one row ("2 Photos added"). Only
+    /// photo and page changes merge: they have no words to compare, so nothing is lost by reading them together.
+    public static func entries(_ revisions: [MeetingRevision], now: Date = Date(),
+                               calendar: Calendar = .current) -> [(day: String, entries: [Entry])] {
+        var result: [(day: String, entries: [Entry])] = []
+        var previous: MeetingRevision?
+        for group in days(revisions, now: now, calendar: calendar) {
+            var entries: [Entry] = []
+            for revision in group.revisions {
+                if let last = entries.last, let before = previous, let key = RevisionText.mergeKey(revision), key == RevisionText.mergeKey(last.revision),
+                   before.date.timeIntervalSince(revision.date) <= mergeWindow {
+                    entries[entries.count - 1] = Entry(revision: last.revision, count: last.count + 1)
+                } else {
+                    entries.append(Entry(revision: revision, count: 1))
+                }
+                previous = revision
+            }
+            result.append((group.day, entries))
+            previous = nil
         }
         return result
     }
