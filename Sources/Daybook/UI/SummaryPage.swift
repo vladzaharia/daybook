@@ -64,6 +64,8 @@ struct SummaryPage: View {
                 .padding(.top, meeting.summary == nil ? DaybookSpacing.s5 : DaybookSpacing.s2)
                 // Without a summary there's no "Your notes" heading: the notes are where Show in Your Notes goes.
                 .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
+            // The handwritten pages an iPhone wrote, to read here.
+            NotebookPagesBlock(meeting: meeting, library: state.library, canPlay: !state.isRecording) { play($0) }
             // Every photo, in the order taken; the summary's sections show the ones they illustrate.
             PhotoStrip(state: state, meeting: meeting)
             // Tentative captions while recording; after the notes, so arriving words never move what

@@ -258,8 +258,17 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
     /// Every summary throws `error` (nil: they work again), as a model that runs out of room would.
     func failSummaries(with error: Error?) { lock.withLock { summaryFailure = error } }
 
+    private var _summariesBlocked = false
+    private var _summarizing = false
+    /// Summaries wait until unblocked (after fusion: a job past the point of taking on recordings that arrive).
+    func blockSummaries(_ blocked: Bool) { lock.withLock { _summariesBlocked = blocked } }
+    var summarizing: Bool { lock.withLock { _summarizing } }
+
     func summarize(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
                    templateInstructions: String?, highlightEvidence: String?, progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes {
+        lock.withLock { _summarizing = true }
+        defer { lock.withLock { _summarizing = false } }
+        while lock.withLock({ _summariesBlocked }) { try await Task.sleep(for: .milliseconds(10)) }
         if let failure = lock.withLock({ summaryFailure }) { throw failure }
         let count = lock.withLock { () -> Int in _summarized.append(transcript); return _summarized.count }
         return GeneratedMeetingNotes(summary: MeetingSummary(kind: .general, title: "Call", overview: "Summary \(count)"),

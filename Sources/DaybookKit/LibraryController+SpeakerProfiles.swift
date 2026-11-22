@@ -143,6 +143,34 @@ extension LibraryController {
         return true
     }
 
+    /// Names a person (every speaker that is them: `speakerIDs`) in a conversation. The person's own profile is This Is
+    /// Me (`namesMe`): its row in the name list (`picked`), or its name typed, marks the speaker as the person
+    /// (`markSpeakerAsMe`, as This Is Me does), and one Undo takes back both. Nothing changes for an empty or unchanged name.
+    @discardableResult
+    public func renameSpeakers(_ speakerIDs: [String], to name: String, picked: UUID? = nil, in id: UUID, undoManager: UndoManager? = nil) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return false }
+        let renamed = update(id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
+            for speakerID in speakerIDs { meeting.renameSpeaker(id: speakerID, name: name) }
+        }
+        if namesMe(name, picked: picked) {
+            return markSpeakerAsMe(speakerIDs, in: id, undoManager: undoManager) || renamed
+        }
+        return renamed
+    }
+
+    /// Whether naming a speaker `name` names them as the person: the row picked in the name list (`picked`) is the
+    /// person's own profile, or, typed, `name` is that profile's and no other profile's, compared without the spaces at
+    /// its ends or case ("vlad " is Vlad; "Jose" isn't José). Two profiles of one name are neither.
+    func namesMe(_ name: String, picked: UUID?) -> Bool {
+        guard let owner = ownerProfileID else { return false }
+        if let picked { return picked == owner }
+        func key(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: .caseInsensitive, locale: nil) }
+        let typed = key(name)
+        let named = speakerProfiles.filter { key($0.name) == typed }
+        return named.count == 1 && named[0].id == owner
+    }
+
     /// Takes the conversation back to `before` and the library's choice to `ownerBefore`, with its redo.
     private func registerThisIsMeUndo(_ id: UUID, before: Meeting, ownerBefore: UUID?, undoManager: UndoManager) {
         guard let after = meeting(id) else { return }

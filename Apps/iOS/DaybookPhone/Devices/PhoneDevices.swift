@@ -138,24 +138,37 @@ final class PhoneDevices {
             guard let self else { throw DaybookError.libraryUnavailable }
             // A recording a Mac asked the recorder to make (multipoint) joins that conversation, also
             // when the recorder moved to this iPhone before it finished.
-            let linked = attachTo ?? self.library.controller.meetings.first { meeting in
+            var linked = attachTo ?? self.library.controller.meetings.first { meeting in
                 meeting.companions?.contains { $0.deviceKind == identity.kind && $0.recordingID == identity.recordingID } == true
             }?.id
+            let watchRecording = identity.kind == AppleWatchIntegration.id ? WatchConnection.listedRecordings[identity.recordingID] : nil
             // A shared recording's conversation that isn't in this library yet (a Mac's, not synced here):
             // made as the device leading it has it, so the copies agree when they meet. Apple Watch's recording
             // names the conversation it was made for, which is made the same way whether or not the shared
             // recording still remembers it (this iPhone relaunched since, say).
             let pending = linked.flatMap(self.cascade.pendingConversation)
-            if let linked, self.library.controller.meeting(linked) == nil, pending != nil || identity.kind == AppleWatchIntegration.id {
+            if let id = linked, self.library.controller.meeting(id) == nil, pending != nil || identity.kind == AppleWatchIntegration.id {
                 try await self.library.reload()
-                if self.library.controller.meeting(linked) == nil {
-                    self.library.controller.add(Meeting(id: linked, title: pending?.title ?? PhoneLibrary.deviceTitle(identity, fallback: url),
-                                                        date: pending?.date ?? PhoneLibrary.deviceStart(identity) ?? Date(),
-                                                        status: pending?.ledHere == true ? .imported : .draft))
+                if self.library.controller.meeting(id) == nil {
+                    if let survivor = await self.library.controller.mergeSurvivor(of: id) {
+                        // Merged into another meanwhile: the recording goes where the rest of it went.
+                        linked = survivor
+                    } else if self.library.controller.isGone(id) || watchRecording?.isContinuation == true {
+                        // In the Trash, or deleted (a later part's conversation was here when it began, so it's gone too):
+                        // a conversation of its own, never one under the old ID, which Restore needs and sync deletes.
+                        linked = nil
+                    } else {
+                        self.library.controller.add(Meeting(id: id, title: pending?.title ?? PhoneLibrary.deviceTitle(identity, fallback: url),
+                                                            date: pending?.date ?? PhoneLibrary.deviceStart(identity) ?? Date(),
+                                                            status: pending?.ledHere == true ? .imported : .draft))
+                    }
                 }
             }
+            // Bookmarks made on the watch go with its recording, on its own timeline, into whichever conversation it lands in.
+            let bookmarks = (watchRecording?.bookmarkTimes ?? []).map { Highlight(id: $0.id, time: $0.time) }
             let filed = try await self.library.importDeviceRecording(url, identity: identity, attachTo: linked, source: source,
-                                                                     requestTranscription: self.settings.requestsTranscription)
+                                                                     requestTranscription: self.settings.requestsTranscription,
+                                                                     bookmarks: bookmarks)
             self.lastImported = filed
             self.onImported?(filed)
             return filed.meeting.id

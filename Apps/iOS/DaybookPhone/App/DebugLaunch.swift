@@ -45,7 +45,7 @@ import SwiftUI
 ///
 /// Sync and Macs:
 ///
-///     --demo-link                paired Macs and a Mac to pair with, for Settings › Macs (no network)
+///     --demo-link                paired Macs and a Mac to pair with, for Settings › Devices (no network)
 ///     --sync-folder <path>       sync through this folder instead of the iCloud container (relative: in the app's tmp)
 ///     --demo-mac <name>[:<hours>]  a Mac that last synced that many hours ago (2 when not given), in the sync folder
 ///

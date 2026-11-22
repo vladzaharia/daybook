@@ -271,6 +271,44 @@ final class TranscriptScreensTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(library.meeting(id)?.revisions.count ?? 0, 4, "Version History keeps each change and its undo")
     }
 
+    /// Undo of Speaker ▸ gives back each passage's speaker alone: words corrected meanwhile stay, and a passage whose
+    /// speaker changed again since (another device's move) keeps that. The undo is a Version History entry too.
+    func testBehaviorUndoingAChangeOfSpeakerTakesBackOnlyThosePassagesSpeakers() async throws {
+        let library = try await library()
+        let id = library.newMeeting(title: "Weekly")
+        let first = TranscriptSegment(trackID: track, start: 0, end: 2, text: "The sink fix", speakerID: "S0")
+        let second = TranscriptSegment(trackID: track, start: 3, end: 5, text: "Ship it Friday", speakerID: "S0")
+        library.update(id) {
+            $0.unifiedTranscript = [first, second]
+            $0.speakers = [Speaker(id: "S0", name: "Speaker 1"), Speaker(id: "S1", name: "Speaker 2"), Speaker(id: "S2", name: "Speaker 3")]
+        }
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+
+        undo.beginUndoGrouping()
+        XCTAssertTrue(TranscriptEdits.changeSpeaker(of: [first.id, second.id], to: "S1", in: id, library: library, undoManager: undo))
+        undo.endUndoGrouping()
+        XCTAssertEqual(undo.undoActionName, "Change Speaker")
+        // Meanwhile, from another device: the first passage's words corrected, the second given to someone else.
+        library.update(id) { meeting in
+            meeting.correctSegment(id: first.id, text: "The sync fix")
+            meeting.giveSpeaker("S2", toPassages: [second.id])
+        }
+
+        undo.undo()
+        var meeting = try XCTUnwrap(library.meeting(id))
+        XCTAssertEqual(meeting.unifiedTranscript.map(\.speakerID), ["S0", "S2"])
+        XCTAssertEqual(meeting.unifiedTranscript.first?.text, "The sync fix")
+        XCTAssertNil(meeting.passageSpeakers[first.id], "back to the speaker it began with")
+        XCTAssertEqual(meeting.passageSpeakers[second.id], "S2")
+        XCTAssertEqual(meeting.revisions.filter { $0.kind == .segmentSpeaker(first.id) }.map(\.newValue), ["S1", "S0"])
+
+        undo.redo()
+        meeting = try XCTUnwrap(library.meeting(id))
+        XCTAssertEqual(meeting.unifiedTranscript.map(\.speakerID), ["S1", "S2"])
+        XCTAssertEqual(meeting.unifiedTranscript.first?.text, "The sync fix")
+    }
+
     // MARK: Photos
 
     private func png() throws -> Data {

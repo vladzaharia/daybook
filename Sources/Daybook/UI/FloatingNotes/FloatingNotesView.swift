@@ -293,7 +293,9 @@ private struct StatusBand: View {
             }
             compactButton
         }
-        .padding(.leading, chrome.buttonInset + chrome.buttonWidth + 6)
+        // The phase starts where the title, the clock and the note field do; it moves over only while the close button shows.
+        .padding(.leading, chrome.isHovering ? chrome.buttonInset + chrome.buttonWidth + 6 : DaybookSpacing.s4)
+        .daybookMotion(DaybookMotion.hover, value: chrome.isHovering)
         .padding(.trailing, chrome.buttonInset)
         .frame(height: max(chrome.band, chrome.buttonCenter * 2))
         .accessibilityElement(children: .contain)

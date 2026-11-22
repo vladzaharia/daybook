@@ -159,6 +159,15 @@ public enum SettingsWords {
         return text.range(of: "MacBook", options: .caseInsensitive) != nil
     }
 
+    // MARK: Microphone
+
+    /// The problem line while the system refuses Daybook the microphone.
+    public static let microphoneRefused = "Daybook can’t use the microphone."
+    /// What Settings' Microphone row says is used: the input the person chose, else Automatic (`MicrophoneChoice`).
+    public static func microphoneValue(_ preference: MicrophoneChoice.Preference) -> String {
+        preference.device?.name ?? MicrophoneChoice.automaticTitle
+    }
+
     // MARK: Calendar
 
     /// Settings › Recording's toggle (DaybookUI's `CalendarSettingsRow`): Calendar is the app's name, so it reads the

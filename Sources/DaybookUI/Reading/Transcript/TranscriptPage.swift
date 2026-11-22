@@ -188,7 +188,8 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
                          highlight: String, current: String?) -> some View {
         switch row {
         case .turn(let speakerID, let first):
-            TurnHeaderRow(meeting: meeting, rowID: row.id, speakerID: speakerID, first: first, actions: actions,
+            TurnHeaderRow(meeting: meeting, rowID: row.id, speakerID: speakerID, first: first,
+                          passages: layout.turnPassages[first.id] ?? [first], actions: actions,
                           nameAttachment: { name in
                               AnyView(name.modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting,
                                                                   profiles: host.library.speakerProfiles,
@@ -241,6 +242,8 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
             canPlay: host.canPlay(),
             correct: correct,
             rename: { speakerID, anchor in renaming = RenameRequest(speakerID: speakerID, anchor: anchor) },
+            changeSpeaker: { TranscriptEdits.changeSpeaker(of: $0, to: $1, in: meeting.id, library: host.library, undoManager: undoManager) },
+            newSpeaker: { renaming = RenameRequest(speakerID: "", anchor: $1, passages: $0) },
             bookmark: { TranscriptEdits.bookmark($0, in: meeting.id, library: host.library) },
             showHeardIn: { heardIn = $0.id },
             showNotes: host.showNotes,
@@ -268,8 +271,12 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
         focusedRow = id.uuidString
     }
 
-    private func rename(_ speakerID: String, _ name: String) {
-        TranscriptEdits.rename(speakerID, to: name, in: meeting.id, library: host.library, undoManager: undoManager)
+    private func rename(_ request: RenameRequest, _ name: String, _ picked: UUID?) {
+        if let passages = request.passages {
+            TranscriptEdits.changeSpeaker(of: passages, toNew: name, picked: picked, in: meeting.id, library: host.library, undoManager: undoManager)
+        } else {
+            TranscriptEdits.rename(request.speakerID, to: name, picked: picked, in: meeting.id, library: host.library, undoManager: undoManager)
+        }
     }
 
     /// ↑ and ↓ move between passages.
@@ -421,6 +428,8 @@ private struct CorrectionRequest: Identifiable {
 private struct RenameRequest: Equatable {
     var speakerID: String
     var anchor: String
+    /// Set for New Speaker…: the passages to give the new speaker, whose name is asked for here.
+    var passages: [UUID]?
 }
 
 /// Rename Speaker as a popover at the row it was asked from (a sheet where a popover has no room).
@@ -430,12 +439,16 @@ private struct RenamePopover: ViewModifier {
     let meeting: Meeting
     let profiles: [SpeakerProfile]
     let me: UUID?
-    let save: (String, String) -> Void
+    let save: (RenameRequest, String, UUID?) -> Void
 
     func body(content: Content) -> some View {
         content.popover(isPresented: Binding(get: { request?.anchor == row }, set: { if !$0 { request = nil } }), arrowEdge: .bottom) {
             if let request {
-                RenameSpeakerForm(name: meeting.speakerName(request.speakerID) ?? "", profiles: profiles, me: me) { save(request.speakerID, $0) }
+                if request.passages != nil {
+                    RenameSpeakerForm(title: "New Speaker", action: "Add", name: "", profiles: profiles, me: me) { save(request, $0, $1) }
+                } else {
+                    RenameSpeakerForm(name: meeting.speakerName(request.speakerID) ?? "", profiles: profiles, me: me) { save(request, $0, $1) }
+                }
             }
         }
     }

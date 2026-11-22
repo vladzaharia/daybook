@@ -109,6 +109,22 @@ enum StatusSheetModel {
         return StatusOverviewModel.strip(lines).map { [$0] } ?? []
     }
 
+    /// The lines under Record, Import, and Search with the cards at the same size (`groups`): minimized as `lines(for:_:)`
+    /// has them; dragged up, without a line whose device or work a card below already says, so each job is shown once,
+    /// with one bar. What no card says (iCloud's line, a Mac nothing lists) stays.
+    static func lines(for detent: StatusDetent, _ lines: [StatusLineWords], inputs: StatusOverviewInputs, now: Date = Date())
+        -> [StatusLineWords]
+    {
+        guard detent != .compact else { return self.lines(for: detent, lines) }
+        let cards = groups(for: detent, inputs, now: now)
+        return lines.filter { line in
+            if line.id.hasPrefix("recorder-") { return !cards.contains(.recorders) }
+            if line.id == StatusOverviewModel.macID || line.id.hasPrefix("mac-") { return !cards.contains(.macs) }
+            if line.id == "queue" { return inputs.localQueue.isEmpty || !cards.contains(.iphone) }
+            return true
+        }
+    }
+
     /// The audio kept on this iPhone, as Settings › Storage's row says it: downloads and recordings
     /// made here together, so not "downloaded". Nil at zero: audio that went back to iCloud isn't a loss to report.
     static func audioOnThisIPhone(bytes: UInt64) -> String? {

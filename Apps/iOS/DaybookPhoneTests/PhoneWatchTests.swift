@@ -19,8 +19,10 @@ final class PhoneWatchTests: XCTestCase {
         let timing: PhoneDevices.Timing
     }
 
-    private func rig(_ configure: (SimulatedWatch) -> Void = { _ in }) throws -> Rig {
-        let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
+    private func rig(synced: Bool = false, _ configure: (SimulatedWatch) -> Void = { _ in }) throws -> Rig {
+        let root = try temporaryDirectory("library")
+        let sync = synced ? LibrarySyncController(localRoot: root, defaults: makeTestDefaults("PhoneWatchTests-sync")) : nil
+        let library = PhoneLibrary(rootURL: root, sync: sync, installation: UUID().uuidString)
         let settings = PhoneSettings(defaults: makeTestDefaults("PhoneWatchTests"))
         // Where PhoneDevices stages what recorders bring.
         let watch = SimulatedWatch(stagingDirectory: library.importsURL.appendingPathComponent("Devices", isDirectory: true))
@@ -34,12 +36,15 @@ final class PhoneWatchTests: XCTestCase {
         return Rig(library: library, settings: settings, devices: devices, watch: watch, devicesDefaults: defaults, timing: timing)
     }
 
-    /// Segments with real audio, as the watch's.
+    /// Segments with real audio, as the watch's, a tone of each recording's own: two recordings never have the same bytes
+    /// (the library keeps one copy of the same audio).
     private static func writesAudio(_ watch: SimulatedWatch) {
         watch.writeSegment = { url, segment in
-            _ = try CaptureFiles.writeClosedSegment(to: url, seconds: segment.duration, frequency: 440)
+            _ = try CaptureFiles.writeClosedSegment(to: url, seconds: segment.duration, frequency: tone(segment.recordingID))
         }
     }
+
+    private static func tone(_ id: String) -> Float { 300 + Float(id.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) % 1_000 }) }
 
     /// Conversations holding a track from the watch.
     private static func withWatchTrack(_ library: PhoneLibrary) -> [Meeting] {
@@ -414,5 +419,278 @@ final class PhoneWatchTests: XCTestCase {
         var withMac = meeting(watchFrom: 2, for: 590)
         withMac.tracks.append(RecordingTrack(source: .microphone, relativePath: "Audio/mac.m4a", fileName: "mac.m4a", duration: 600))
         XCTAssertFalse(placeholder(withMac), "Another device's recording is in it")
+    }
+
+    // MARK: Keep Recording's later part
+
+    /// A conversation this iPhone recorded, three seconds from `start`, filed as its own recording.
+    private func conversation(_ id: UUID = UUID(), title: String = "Standup", start: Date, placement: LibraryPlacement? = nil,
+                              in library: PhoneLibrary) async throws -> UUID {
+        let url = try temporaryDirectory().appendingPathComponent("phone.m4a")
+        _ = try CaptureFiles.writeClosedSegment(to: url, seconds: 3, frequency: Self.tone(id.uuidString))
+        try await library.reload()
+        var meeting = Meeting(id: id, title: title, date: start, status: .imported)
+        meeting.placement = placement
+        library.controller.add(meeting)
+        await library.controller.acquireLock()
+        defer { library.controller.releaseLock() }
+        let identity = PhoneDevice.identity(recordingID: UUID(), installation: library.installationID)
+        _ = try await library.controller.ingest(url, into: id, provenance: RecordingProvenance(source: .microphone, device: identity, offset: 0,
+                                                                                             duration: 3, startedAt: start))
+        return id
+    }
+
+    /// The devices started, with the watch connected and its clock sampled.
+    private func started(_ rig: Rig) async throws {
+        try await rig.library.reload()
+        rig.devices.start()
+        try await waitUntil("the watch, connected") { rig.devices.watch?.session?.direct?.state == .connected }
+        try await waitUntil("the watch, listed") { (rig.devices.watch?.session?.direct as? WatchConnection)?.isRefreshing == false }
+    }
+
+    /// Keep Recording on the watch into `conversation`: `seconds` of audio, a bookmark `at` seconds in when asked, then Stop.
+    /// Returns the watch recording and its bookmark.
+    @discardableResult
+    private func keepRecording(_ rig: Rig, into conversation: UUID, seconds: TimeInterval = 3,
+                               bookmarkAt: TimeInterval? = nil) throws -> (recording: String, bookmark: WatchBookmark?) {
+        rig.watch.pressKeepRecording(into: conversation)
+        let recording = try XCTUnwrap(rig.watch.recording?.id)
+        XCTAssertEqual(rig.watch.recording?.isContinuation, true)
+        rig.watch.record(seconds)
+        let mark = bookmarkAt.flatMap { rig.watch.pressBookmark(at: $0) }
+        rig.watch.pressStop()
+        return (recording, mark)
+    }
+
+    /// The conversation the watch's recording went into, once its import has finished (its bookmarks and request filed).
+    private func imported(_ recording: String, in rig: Rig) async throws -> Meeting {
+        try await waitUntil("the watch's recording imported", timeout: 20) {
+            rig.devices.lastImported?.meeting.tracks.contains { $0.deviceRecordingID == recording } == true
+        }
+        return try XCTUnwrap(rig.devices.lastImported.flatMap { rig.library.controller.meeting($0.meeting.id) })
+    }
+
+    /// The later part lands in the same conversation as a further track, at its own start on this iPhone's clock (the
+    /// ten minutes between stay a gap), with its bookmark on its track, and asks for its new audio to be processed. The
+    /// conversation keeps its title, date, and timeline.
+    func testKeepRecordingFilesTheLaterPartIntoTheSameConversationAfterItsGap() async throws {
+        let rig = try rig(Self.writesAudio)
+        let start = Date().addingTimeInterval(-600)
+        let id = try await conversation(start: start, in: rig.library)
+        try await started(rig)
+        let before = try XCTUnwrap(rig.library.controller.meeting(id))
+
+        let (recording, mark) = try keepRecording(rig, into: id, bookmarkAt: 1.5)
+        let meeting = try await imported(recording, in: rig)
+        XCTAssertEqual(meeting.id, id)
+        XCTAssertEqual(rig.library.controller.meetings.count, 1, "No conversation of its own")
+        XCTAssertEqual(meeting.title, "Standup")
+        XCTAssertEqual(meeting.date, before.date)
+        XCTAssertEqual(meeting.tracks.count, 2)
+        let phone = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == PhoneDevice.kind })
+        XCTAssertEqual(phone.offset, 0, "This iPhone's recording stays the timeline's origin")
+        let later = try XCTUnwrap(meeting.tracks.first { $0.deviceRecordingID == recording })
+        XCTAssertEqual(later.duration ?? 0, 3, accuracy: 0.05)
+        let begun = try XCTUnwrap(later.startedAt)
+        XCTAssertEqual(begun.timeIntervalSinceNow, 0, accuracy: 10, "Its own start, on this iPhone's clock")
+        XCTAssertGreaterThan(begun.timeIntervalSince(try XCTUnwrap(phone.startedAt).addingTimeInterval(3)), 590, "The time between is a gap")
+        XCTAssertTrue(meeting.openProcessingRequests.contains { $0.mode == .newAudio }, "Its new audio is asked for")
+        let bookmark = try XCTUnwrap(meeting.highlights.first)
+        XCTAssertEqual(meeting.highlights.count, 1)
+        XCTAssertEqual(bookmark.id, mark?.id)
+        XCTAssertEqual(bookmark.trackID, later.id, "On the later part, so it follows its placement")
+        XCTAssertEqual(bookmark.time, 1.5, accuracy: 0.001, "At its moment in the later part")
+    }
+
+    /// The conversation went to the Trash during the five minutes: the later part gets a conversation of its own, named
+    /// as any of the watch's recordings, and the one in the Trash keeps its ID, so Restore brings it back as it was.
+    func testALaterPartWhoseConversationIsInTheTrashGetsOneOfItsOwn() async throws {
+        let rig = try rig(Self.writesAudio)
+        let id = try await conversation(start: Date().addingTimeInterval(-300), in: rig.library)
+        try await started(rig)
+        let trashed = try await rig.library.controller.moveToTrash(id)
+        XCTAssertTrue(trashed)
+
+        let (recording, mark) = try keepRecording(rig, into: id, bookmarkAt: 1)
+        let meeting = try await imported(recording, in: rig)
+        XCTAssertNotEqual(meeting.id, id, "Never under the trashed conversation's ID")
+        XCTAssertTrue(meeting.title.hasPrefix("Apple Watch at "), meeting.title)
+        XCTAssertEqual(meeting.tracks.count, 1)
+        XCTAssertEqual(meeting.highlights.map(\.id), [try XCTUnwrap(mark).id], "Its bookmark goes with it")
+        XCTAssertNil(rig.library.controller.meeting(id))
+        XCTAssertTrue(rig.library.controller.trashedMeetingIDs().contains(id))
+
+        let restored = try await rig.library.controller.restoreFromTrash(id)
+        XCTAssertEqual(restored.id, id)
+        XCTAssertEqual(restored.title, "Standup")
+        XCTAssertEqual(restored.tracks.count, 1, "As it was")
+        XCTAssertEqual(Set(rig.library.controller.meetings.map(\.id)), [id, meeting.id])
+    }
+
+    /// Its deletion went out through sync (or it was deleted outright): the later part never brings that ID back, where
+    /// the next pass would delete it again, audio and all. It gets a conversation of its own.
+    func testALaterPartWhoseConversationWasDeletedGetsOneOfItsOwn() async throws {
+        let rig = try rig(synced: true, Self.writesAudio)
+        let synced = try await conversation(start: Date().addingTimeInterval(-300), in: rig.library)
+        let outright = try await conversation(title: "Retro", start: Date().addingTimeInterval(-200), in: rig.library)
+        try await started(rig)
+        for id in [synced, outright] {
+            let trashed = try await rig.library.controller.moveToTrash(id)
+            XCTAssertTrue(trashed)
+            try FileManager.default.removeItem(at: rig.library.rootURL.appendingPathComponent("Trash/\(id.uuidString)"))
+        }
+        // This device's sync checkpoint records the deletion, as a pass that published it leaves it.
+        let sync = try XCTUnwrap(rig.library.controller.sync)
+        let folder = rig.library.rootURL.appendingPathComponent("Sync", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let checkpoint = folder.appendingPathComponent("\(UUID().uuidString)-\(AudioDigest.sha256(data: Data(sync.deviceID.utf8)).prefix(16)).json")
+        try JSONEncoder().encode(["deletedIDs": [synced]]).write(to: checkpoint)
+        XCTAssertTrue(sync.isSyncedDeletion(synced))
+
+        for id in [synced, outright] {
+            let (recording, _) = try keepRecording(rig, into: id)
+            let meeting = try await imported(recording, in: rig)
+            XCTAssertNotEqual(meeting.id, id)
+            XCTAssertTrue(meeting.title.hasPrefix("Apple Watch at "), meeting.title)
+            XCTAssertNil(rig.library.controller.meeting(id))
+        }
+        XCTAssertEqual(rig.library.controller.meetings.count, 2, "Two conversations of their own, nothing under the old IDs")
+    }
+
+    /// The conversation was merged into another during the five minutes: the later part goes where the rest of it went.
+    func testALaterPartWhoseConversationWasMergedAwayJoinsTheOneItWentInto() async throws {
+        let rig = try rig(Self.writesAudio)
+        let survivor = try await conversation(title: "Planning", start: Date().addingTimeInterval(-900), in: rig.library)
+        let merged = try await conversation(title: "Planning, part two", start: Date().addingTimeInterval(-300), in: rig.library)
+        try await started(rig)
+        let controller = rig.library.controller
+        let kept = try await controller.mergeConversations([survivor, merged], audio: { track, id in try await controller.audioURL(for: track, in: id) },
+                                                           photo: { _, _ in throw DaybookError.libraryUnavailable },
+                                                           context: { PhoneActions.mergeContext($0, recordingOnMac: []) })
+        XCTAssertEqual(kept, survivor)
+        XCTAssertNil(controller.meeting(merged))
+
+        let (recording, mark) = try keepRecording(rig, into: merged, bookmarkAt: 2)
+        let meeting = try await imported(recording, in: rig)
+        XCTAssertEqual(meeting.id, survivor)
+        XCTAssertEqual(controller.meetings.map(\.id), [survivor], "Nothing made for it")
+        XCTAssertEqual(meeting.tracks.filter { !$0.isMovedOut }.count, 3, "Both recordings merged, and the later part")
+        XCTAssertTrue(meeting.highlights.contains { $0.id == mark?.id })
+        XCTAssertNil(controller.meeting(merged))
+    }
+
+    /// A Personal conversation with the lock on: the later part's audio is kept, in that conversation, and nothing about the
+    /// import names it. While the lock hides it, the watch isn't offered Keep Recording for it.
+    func testALaterPartOfALockedPersonalConversationIsKeptThere() async throws {
+        let rig = try rig(Self.writesAudio)
+        let personal = try await conversation(title: "Session with Dr. Lee", start: Date().addingTimeInterval(-300), placement: .personal,
+                                              in: rig.library)
+        let work = try await conversation(title: "Weekly product sync", start: Date().addingTimeInterval(-200), placement: .work, in: rig.library)
+        let lock = PersonalLock(defaults: makeTestDefaults("PhoneWatchTests-lock"), platform: .iPhone,
+                                authenticator: FakePersonalLockAuthenticator(method: .faceID, answers: false))
+        lock.lookup = { [library = rig.library] id in library.controller.meeting(id) }
+        await lock.setRequired(true)
+        let previous = ReadingSession.appLock
+        ReadingSession.appLock = lock
+        defer { ReadingSession.appLock = previous }
+        XCTAssertTrue(lock.hides(personal))
+        let model = PhoneAppModel(recorder: RecorderRig().recorder, library: rig.library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+                                  settings: rig.settings, devices: rig.devices)
+        XCTAssertFalse(model.canAppendRecording(to: personal), "Hidden by the lock: not offered")
+        XCTAssertTrue(model.canAppendRecording(to: work))
+        try await started(rig)
+
+        // Kept Recording before the lock came on: its audio is the conversation's.
+        let (recording, _) = try keepRecording(rig, into: personal)
+        let meeting = try await imported(recording, in: rig)
+        XCTAssertEqual(meeting.id, personal)
+        XCTAssertEqual(meeting.title, "Session with Dr. Lee")
+        XCTAssertEqual(meeting.effectivePlacement, .personal)
+        XCTAssertEqual(rig.library.controller.meetings.count, 2, "No copy of it, under any name")
+        let text = DeviceNotifications.batchText(count: 1, device: "Apple Watch")
+        XCTAssertFalse((text.title + text.body).contains("Dr. Lee"), "What the import says names no conversation")
+    }
+
+    /// The first part's import still waits (a segment missing) when the later part arrives: the later part goes in first,
+    /// into the same conversation, and the first part joins it once complete. Nothing makes a second conversation, and
+    /// each keeps its own start.
+    func testALaterPartThatArrivesBeforeTheFirstPartBothJoinTheConversation() async throws {
+        let rig = try rig(Self.writesAudio)
+        let id = try await conversation(start: Date().addingTimeInterval(-120), in: rig.library)
+        try await started(rig)
+        // The first part, recorded along with the conversation, its segments held back on the way.
+        rig.watch.deliversSegments = false
+        rig.devices.cascade.begin(id, title: "Standup", date: Date(), ledHere: true)
+        await rig.devices.cascade.startRecorders()
+        let first = try XCTUnwrap(rig.watch.recording?.id)
+        XCTAssertEqual(rig.watch.recording?.conversationID, id)
+        rig.watch.record(3)
+        await rig.devices.cascade.stop()
+        try await waitUntil("the first part stops") { rig.watch.recording == nil }
+        rig.watch.deliversSegments = true
+
+        let (later, _) = try keepRecording(rig, into: id)
+        let meeting = try await imported(later, in: rig)
+        XCTAssertEqual(meeting.id, id)
+        XCTAssertFalse(meeting.tracks.contains { $0.deviceRecordingID == first }, "The first part still waits")
+
+        rig.watch.deliver()
+        let whole = try await imported(first, in: rig)
+        XCTAssertEqual(whole.id, id)
+        XCTAssertEqual(rig.library.controller.meetings.map(\.id), [id])
+        let watchTracks = whole.tracks.filter { $0.deviceKind == AppleWatchIntegration.id }
+        XCTAssertEqual(watchTracks.count, 2)
+        let firstStart = try XCTUnwrap(watchTracks.first { $0.deviceRecordingID == first }?.startedAt)
+        let laterStart = try XCTUnwrap(watchTracks.first { $0.deviceRecordingID == later }?.startedAt)
+        XCTAssertLessThanOrEqual(firstStart, laterStart, "Each at its own start")
+    }
+
+    /// A bookmark on the watch goes to the conversation the watch's recording is for, not whatever this iPhone records:
+    /// with this iPhone recording another conversation, it isn't put there, and it arrives with the watch's recording.
+    /// With this iPhone recording the same one, it shows at once in that recording, and the watch's import adds no second.
+    func testAWatchBookmarkGoesToTheWatchsConversationOnly() async throws {
+        let rig = try rig(Self.writesAudio)
+        let recorder = RecorderRig()
+        let model = PhoneAppModel(recorder: recorder.recorder, library: rig.library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+                                  settings: rig.settings, devices: rig.devices)
+        let earlier = try await conversation(start: Date().addingTimeInterval(-300), in: rig.library)
+        try await started(rig)
+        let session = try XCTUnwrap(rig.devices.watch?.session)
+
+        // Kept Recording into an earlier conversation while this iPhone records a new one, the watch not along with it.
+        session.update { $0.alsoRecordsWithMac = false }
+        rig.watch.pressKeepRecording(into: earlier)
+        rig.watch.record(2)
+        try await model.startRecording()
+        recorder.pump(1)
+        let current = try XCTUnwrap(model.recorder.captureID)
+        XCTAssertNotEqual(current, earlier)
+        let elsewhere = try XCTUnwrap(rig.watch.pressBookmark(at: 1))
+        XCTAssertFalse(model.recorder.highlights.contains { $0.id == elsewhere.id }, "Not in this iPhone's recording of another conversation")
+        rig.watch.pressStop()
+        let kept = try await imported(try XCTUnwrap(rig.watch.finished.last?.id), in: rig)
+        XCTAssertEqual(kept.id, earlier)
+        XCTAssertEqual(kept.highlights.map(\.id), [elsewhere.id], "It arrived with the watch's recording")
+        try await model.stopRecording()
+        XCTAssertFalse(rig.library.controller.meeting(current)?.highlights.contains { $0.id == elsewhere.id } ?? false)
+
+        // Recording along with this iPhone: shown at once, and one bookmark once both recordings are in.
+        session.update { $0.alsoRecordsWithMac = true }
+        try await model.startRecording()
+        recorder.pump(1)
+        let shared = try XCTUnwrap(model.recorder.captureID)
+        try await waitUntil("the watch records along") { rig.watch.recording?.conversationID == shared }
+        let watchRecording = try XCTUnwrap(rig.watch.recording?.id)
+        rig.watch.record(2)
+        let along = try XCTUnwrap(rig.watch.pressBookmark(at: 1))
+        XCTAssertTrue(model.recorder.highlights.contains { $0.id == along.id }, "Shown at once in this iPhone's recording")
+        recorder.pump(1)
+        try await model.stopRecording()
+        try await waitUntil("the watch stops with it") { rig.watch.recording == nil }
+        let both = try await imported(watchRecording, in: rig)
+        XCTAssertEqual(both.id, shared)
+        XCTAssertEqual(both.highlights.filter { $0.id == along.id }.count, 1, "One bookmark, not one per recording")
     }
 }
