@@ -314,6 +314,7 @@ public enum ConversationMerge {
         let issues = (folded.correctionTransferIssues ?? []).filter { !knownIssues.contains($0.id) }.map { issue in
             var copied = issue
             copied.originalSegment = moved(issue.originalSegment, shifting: true)
+            copied.speakerID = speaker(issue.speakerID)
             return copied
         }
         if !issues.isEmpty { merged.correctionTransferIssues = (merged.correctionTransferIssues ?? []) + issues }
@@ -507,11 +508,18 @@ public enum ConversationMerge {
         let carriedPhotoIDs = Set(carriedPhotos.map(\.id))
         let carriedPageIDs = Set(carriedPages.map(\.id))
         let carriedPassageIDs = Set(carriedPages.flatMap { page in page.passages.map(\.id) + (page.corrections ?? []).map(\.passageID) })
+        let passagesHere = Set(merged.unifiedTranscript.map(\.id)), speakersHere = Set(merged.speakers.map(\.id))
         let revisions = folded.revisions.filter { !knownRevisions.contains($0.id) }.compactMap { revision -> MeetingRevision? in
             var copied = revision
             switch revision.kind {
             case .speaker(let id): copied.kind = .speaker(historyID(id))
             case .segment, .correctionTransfer: break
+            case .segmentSpeaker(let id):
+                // A passage that came, given to someone here: its speakers under their IDs here ("" stays none).
+                let (old, new) = (revision.oldValue.isEmpty ? "" : speaker(revision.oldValue) ?? "", revision.newValue.isEmpty ? "" : speaker(revision.newValue) ?? "")
+                guard passagesHere.contains(id), [old, new].allSatisfy({ $0.isEmpty || speakersHere.contains($0) }) else { return nil }
+                copied.oldValue = old
+                copied.newValue = new
             case .photo(let id), .photoCaption(let id): guard carriedPhotoIDs.contains(id) else { return nil }
             case .page(let id): guard carriedPageIDs.contains(id) else { return nil }
             case .passage(let id): guard carriedPassageIDs.contains(id) else { return nil }

@@ -60,7 +60,7 @@ struct MeetingInspector: View {
         ConversationActions.Context(platform: .mac, isRecording: state.recordingID == meeting.id,
                                     isProcessingHere: state.processor.queue.runningID == meeting.id || state.processor.queue.queuedIDs.contains(meeting.id),
                                     status: state.processingStatus(for: meeting), isDeviceRecording: state.isRecording,
-                                    summarizeChoices: state.summarizeAgainChoices(for: meeting))
+                                    summarizeChoices: state.summarizeAgainChoices(for: meeting), speakerCounts: state.speakerCountsOffered)
     }
 
     static func inputs(_ state: AppState, _ meeting: Meeting) -> ConversationStatusPresentation.Inputs {
@@ -95,6 +95,10 @@ struct MeetingInspector: View {
             state.processor.enqueue(id, mode: mode)
         case .summarizeAgain(let choice):
             state.summarizeAgain(id, as: choice)
+        case .identifySpeakers(let ask):
+            guard state.processor.queue.runningID != id else { return }
+            state.cancelQueued(id)
+            state.processor.enqueue(id, mode: .speakerRefresh, speakers: ask)
         case .summarize:
             // Choosing a different template summarizes again right away; the earlier summary stays in Version History.
             guard state.processor.queue.runningID != id else { return }

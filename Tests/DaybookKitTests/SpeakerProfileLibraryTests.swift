@@ -397,6 +397,104 @@ final class SpeakerProfileLibraryTests: XCTestCase {
         XCTAssertTrue(library.canMarkSpeakerAsMe(["spare:x"], in: spare), "a me-profile exists: anyone can be named as it")
     }
 
+    /// Typing the person's own name, or choosing it from the name list, is This Is Me: what the speaker rejected goes, one
+    /// Undo takes both back, and another name is only a rename.
+    func testBehaviorNamingASpeakerAsTheMeProfileMarksThemAsMeAndOneUndoTakesItBack() async throws {
+        let (library, vlad, bob) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("call", in: library, daysAgo: 1, [("a", SyntheticVoice.near(SyntheticVoice.person(6), similarity: 0.95, seed: 83), 200)])
+        library.update(id) { meeting in
+            meeting.setSpeakerIdentity(SpeakerIdentity(speakerID: "call:a", profileID: bob.id, source: .suggested, similarity: 0.7,
+                                                       rejectedProfileIDs: [vlad.id]), for: "call:a")
+        }
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        let before = name(library, id, "call:a")
+
+        undo.beginUndoGrouping()
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: " vlad ", in: id, undoManager: undo))
+        undo.endUndoGrouping()
+        XCTAssertEqual(name(library, id, "call:a"), "Vlad", "as the profile is spelled")
+        XCTAssertFalse(library.meeting(id)?.speakerIdentity("call:a")?.rejectedProfileIDs?.contains(vlad.id) ?? false, "no longer turned down as me")
+
+        undo.undo()
+        XCTAssertEqual(name(library, id, "call:a"), before)
+        XCTAssertTrue(library.meeting(id)?.speakerIdentity("call:a")?.rejectedProfileIDs?.contains(vlad.id) ?? false, "the rejection is back")
+    }
+
+    func testBehaviorTheSpeakerNamedAsTheMeProfileIsThePersonsMeOnceSettled() async throws {
+        let (library, vlad, _) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("call", in: library, daysAgo: 1, [("a", SyntheticVoice.near(SyntheticVoice.person(6), similarity: 0.95, seed: 83), 200)])
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: "Vlad", in: id))
+        await settle(library)
+        XCTAssertFalse(library.canMarkSpeakerAsMe(["call:a"], in: id), "now the person's me")
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("call:a")?.profileID, vlad.id)
+    }
+
+    func testBehaviorNamingASpeakerAnotherNameIsOnlyARenameAndNothingChangesForAnEmptyOrSameName() async throws {
+        let (library, vlad, _) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("call", in: library, daysAgo: 1, [("a", SyntheticVoice.near(SyntheticVoice.person(6), similarity: 0.95, seed: 83), 200)])
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: "Priya", in: id))
+        XCTAssertEqual(name(library, id, "call:a"), "Priya")
+        XCTAssertTrue(library.canMarkSpeakerAsMe(["call:a"], in: id), "still anyone's to mark")
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+        XCTAssertFalse(library.renameSpeakers(["call:a"], to: "Priya", in: id), "same name")
+        XCTAssertFalse(library.renameSpeakers(["call:a"], to: "  ", in: id), "empty name")
+    }
+
+    /// Me by name compares only the spaces at the ends and case: another spelling is only a rename; a row picked in the
+    /// name list is that row's profile, whatever it's called; and a name two profiles share marks no one. What it does
+    /// is This Is Me's, seen here as the rejected me-profile going.
+    func testBehaviorMeByNameIsThePickedRowOrTheOwnProfilesNameAlone() async throws {
+        let (library, vlad, bob) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("call", in: library, daysAgo: 1, [("a", SyntheticVoice.near(SyntheticVoice.person(6), similarity: 0.95, seed: 83), 200)])
+        func rejectsMe() -> Bool { library.meeting(id)?.speakerIdentity("call:a")?.rejectedProfileIDs?.contains(vlad.id) ?? false }
+        library.update(id) { meeting in
+            meeting.setSpeakerIdentity(SpeakerIdentity(speakerID: "call:a", profileID: bob.id, source: .suggested, similarity: 0.7,
+                                                       rejectedProfileIDs: [vlad.id]), for: "call:a")
+        }
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: "Vlád", in: id))
+        XCTAssertTrue(rejectsMe(), "accents count: only a rename")
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: "Bob", picked: bob.id, in: id))
+        XCTAssertTrue(rejectsMe())
+
+        // Another person called Vlad, with a profile of their own.
+        let namesake = SpeakerProfile(id: UUID(), name: "Vlad")
+        library.updateMetadata { metadata in
+            metadata.speakerProfiles = ((metadata.speakerProfiles ?? []) + [.edit(namesake.id.uuidString, value: namesake, replacing: nil)])
+                .sorted { $0.id < $1.id }
+        }
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: " vlad", in: id))
+        XCTAssertTrue(rejectsMe(), "a name two profiles have is no one's in particular")
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: "Vlád", in: id))
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: "Vlad", picked: namesake.id, in: id))
+        XCTAssertTrue(rejectsMe(), "the namesake's row is the namesake")
+        XCTAssertTrue(library.renameSpeakers(["call:a"], to: "Vlad", picked: vlad.id, in: id))
+        XCTAssertFalse(rejectsMe(), "the person's own row is This Is Me")
+    }
+
+    /// New Speaker… with the person's own name is This Is Me too; one that moves nothing makes no speaker.
+    func testBehaviorANewSpeakerCalledByThePersonsOwnNameIsThemAndOneThatMovesNothingIsntMade() async throws {
+        let (library, vlad, _) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("call", in: library, daysAgo: 1, [("a", SyntheticVoice.near(SyntheticVoice.person(6), similarity: 0.95, seed: 83), 200),
+                                                                 ("b", SyntheticVoice.near(SyntheticVoice.person(7), similarity: 0.95, seed: 84), 100)])
+        library.update(id) { $0.unifiedTranscript = $0.transcripts[0].segments }
+        let speakers = library.meeting(id)?.speakers.count
+        XCTAssertFalse(library.giveNewSpeaker(named: "Priya", toPassages: [UUID()], in: id, undoManager: nil))
+        XCTAssertEqual(library.meeting(id)?.speakers.count, speakers, "no passage moved: no speaker")
+
+        let passage = try XCTUnwrap(library.meeting(id)?.unifiedTranscript.last)
+        XCTAssertTrue(library.giveNewSpeaker(named: "vlad ", toPassages: [passage.id], in: id, undoManager: nil))
+        let meeting = try XCTUnwrap(library.meeting(id))
+        let given = try XCTUnwrap(meeting.unifiedTranscript.last?.speakerID)
+        XCTAssertNotEqual(given, "call:b")
+        XCTAssertEqual(meeting.speakerName(given), "Vlad", "named as the person's own profile, as This Is Me names them")
+    }
+
     func testBehaviorMarkingASuggestedSpeakerConfirmsItAndKeepsTheLibrarysChoice() async throws {
         let (library, vlad, bob) = try await markingLibrary()
         library.setOwnerProfile(vlad.id)
