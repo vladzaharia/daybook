@@ -58,7 +58,7 @@ public struct StatusQueueItem: Identifiable, Equatable, Sendable {
 
 /// One conversation in a queue. Under a device's row it's indented to that row's text (`indented`); with no device
 /// above it, it starts at the card's edge, with no empty glyph column. Its title and line open the conversation;
-/// a failure offers Try Again and Details, and a summary its placement's choices.
+/// a failure offers Details and Try Again, and a summary its placement's choices.
 public struct StatusQueueRow: View {
     private let item: StatusQueueItem
     private let indented: Bool
@@ -162,13 +162,14 @@ public struct StatusQueueRow: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: DaybookSpacing.s2))
             : AnyLayout(HStackLayout(spacing: DaybookSpacing.s4))
         return layout {
+            // Details first, then what can be done, as the page's box orders them.
+            if let details = item.details {
+                DetailsButton(details: details)
+            }
             ForEach(item.actions, id: \.self) { action in
                 Button(action.title) { perform(action) }
                     // Among rows of the same choices, VoiceOver says which conversation's it is.
                     .accessibilityLabel("\(action.title), \(item.title)")
-            }
-            if let details = item.details {
-                DetailsButton(details: details)
             }
         }
         .buttonStyle(.daybookLink)
