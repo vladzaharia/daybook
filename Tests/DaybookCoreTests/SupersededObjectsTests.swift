@@ -708,6 +708,75 @@ final class SupersededObjectsTests: XCTestCase {
         XCTAssertNil(state.unrestarted)
     }
 
+    /// Conversations changed in a pass that can't judge, when saving them fails, are saved on the next pass (compared
+    /// with what's saved, not with memory), so a relaunch after it still restarts the wait.
+    func testBehaviorChangedConversationsThatCouldntBeSavedAreSavedOnTheNextPass() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        try await acknowledged(mac, phone)
+        let now = try await acknowledgedSince(mac, compressed.original.sha256)
+        try await noticed(mac, phone, at: now.addingTimeInterval(day - 60))
+        let source = root.appendingPathComponent("walk.wav")
+        try Data(repeating: 78, count: 4_096).write(to: source)
+        let walk = try await MeetingStore(rootURL: local("Phone")).importAudio(from: source, into: Meeting(title: "Walk"), source: .microphone)
+        try await editOnPhone(compressed.meeting.id, "Vlad named on the iPhone")
+        try await pass(phone, "Phone", at: now.addingTimeInterval(day), watched: false)
+        let walkObject = blob(walk.tracks[0].sha256)
+        cloud.holdDownloads(true)
+        try cloud.evict(walkObject)
+        struct Failed: Error {}
+        await mac.setSupersededRememberFault { throw Failed() }
+        try await pass(mac, "Mac", at: now.addingTimeInterval(day + 60), watched: false)
+        await mac.setSupersededRememberFault(nil)
+        // Still unable to judge, but saved this time.
+        try await pass(mac, "Mac", at: now.addingTimeInterval(day + 90), watched: false)
+        cloud.holdDownloads(false)
+        try cloud.deliver(walkObject)
+        let relaunched = try self.mac()
+        let judged = now.addingTimeInterval(day + 120)
+        try await noticed(relaunched, phone, at: judged, watched: false)
+        XCTAssertTrue(exists(blob(compressed.original.sha256)))
+        let state = await relaunched.supersededState()
+        XCTAssertEqual(state.objects[compressed.original.sha256]?.since, judged)
+    }
+
+    /// While the conversations changed since the last check can't be saved, nothing comes due.
+    func testBehaviorNothingComesDueWhileChangedConversationsArentSaved() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        let other = Meeting(title: "Other")
+        try await MeetingStore(rootURL: local("Mac")).save(other)
+        try await acknowledged(mac, phone)
+        let now = try await acknowledgedSince(mac, compressed.original.sha256)
+        try await editOnPhone(other.id, "Changed on the iPhone")
+        try await pass(phone, "Phone", at: now.addingTimeInterval(day + 30))
+        struct Failed: Error {}
+        await mac.setSupersededRememberFault { throw Failed() }
+        try await pass(mac, "Mac", at: now.addingTimeInterval(day + 60))
+        await mac.setSupersededRememberFault(nil)
+        XCTAssertTrue(exists(blob(compressed.original.sha256)), "not while what changed isn't saved")
+        try await noticed(mac, phone, at: now.addingTimeInterval(day + 120))
+        XCTAssertFalse(exists(blob(compressed.original.sha256)))
+    }
+
+    /// A conversation, or a recording, carrying fields this version can't read keeps its originals: they might say to,
+    /// as they keep a recording from being compressed.
+    func testBehaviorAConversationWithFieldsThisVersionCantReadKeepsItsOriginal() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        try await acknowledged(mac, phone)
+        let now = try await acknowledgedSince(mac, compressed.original.sha256)
+        let file = local("Mac").appendingPathComponent("Meetings/\(compressed.meeting.id.uuidString)/meeting.json")
+        var record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        record["keepsOriginals"] = true
+        try JSONSerialization.data(withJSONObject: record).write(to: file)
+        let stored = try await MeetingStore(rootURL: local("Mac")).list().first { $0.id == compressed.meeting.id }
+        XCTAssertFalse(try XCTUnwrap(stored).unknownFields.isEmpty)
+        try await noticed(mac, phone, at: now.addingTimeInterval(day + 60))
+        XCTAssertTrue(exists(blob(compressed.original.sha256)))
+        XCTAssertEqual(try notice()?.objects, [])
+    }
+
     /// Every other way a pass ends before judging keeps a changed conversation for the next one that does: a presence it
     /// can't read (a trim), its own notice not downloaded (nothing runs), the library saying stop (a withdrawal).
     func testBehaviorEveryPassThatDoesntJudgeKeepsAChangedConversationForTheNext() async throws {

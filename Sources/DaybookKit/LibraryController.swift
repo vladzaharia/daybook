@@ -985,12 +985,14 @@ public final class LibraryController {
         // A superseded original's object the pass found due goes now, still under the lock, with the library's
         // conversations, its settings, and what voice profiles hold asked again (LibrarySyncSuperseded.swift); only after a
         // pass the library applied and acknowledged, so what it brought (a voiceprint) is asked about too.
-        // A name not yet a voiceprint here (speaker profiles not settled since what they read last changed) is a pause too,
-        // and a conversation they leave alone for now (recording, processing) holds its originals.
+        // A name not yet a voiceprint here (speaker profiles not settled since what they read last changed, or no coordinator
+        // to say) is a pause too, and asks for a reconciliation (a change of options, or of what it leaves alone, isn't one
+        // it hears of); a conversation they leave alone for now (recording, processing) holds its originals.
         if let engine = sync.engine, await engine.hasSupersededObjectsDue {
             let current = await settingsAreCurrent()
             let voices = speakerProfileCoordinator?.pendingVoiceWork
-            if applied?.acknowledged == true, supersededJudgment(settingsCurrent: current) == .judge, voices?.unsettled != true,
+            if voices?.unsettled == true { speakerProfileCoordinator?.schedule() }
+            if applied?.acknowledged == true, supersededJudgment(settingsCurrent: current) == .judge, !(voices?.unsettled ?? true),
                let held = await meetingsHoldingOriginalsInICloud() {
                 await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held.union(voices?.skipped ?? []))
             } else {

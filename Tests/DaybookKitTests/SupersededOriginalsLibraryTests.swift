@@ -26,10 +26,15 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         try sync.connect(to: cloud, monitorChanges: false)
         let library = LibraryController(rootURL: local, sync: sync)
         try await library.load()
+        // The Mac's speaker profiles, settled before each pass (a Mac that may delete without them deletes nothing).
+        let coordinator = SpeakerProfileCoordinator(library: library, options: { SpeakerProfileOptions(recognizes: false) })
+        library.speakerProfileCoordinator = coordinator
+        coordinators.append(coordinator)
         return library
     }
 
     private var last: Date?
+    private var coordinators: [SpeakerProfileCoordinator] = []
 
     /// A pass as the app runs it, with the engine's clocks at `now`; and the passes every few hours before it that a running
     /// Mac makes (a day is a day watched).
@@ -49,6 +54,7 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         await engine.setContinuousClock { SyncClockMark(boot: "test", seconds: now.timeIntervalSince1970) }
         await engine.setPresenceClock { now }
         await library.flush()
+        for coordinator in coordinators where library.speakerProfileCoordinator === coordinator { await coordinator.refresh() }
         let applied = await library.synchronize()
         XCTAssertEqual(applied?.acknowledged ?? false, acknowledged, "the sync pass ran and was acknowledged", file: file, line: line)
     }
@@ -186,6 +192,97 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         await coordinator.refresh()
         now = now.addingTimeInterval(60)
         try await single(library, at: now)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
+    }
+
+    /// A speaker named after its conversation was compressed, found without a voice (an older speaker model): its profile
+    /// learns from it once it's given one, and the clip of its speech is cut from the original, so the original stays in
+    /// iCloud past its day; once the voice is given and the clip is in iCloud, it goes.
+    func testBehaviorASpeakerNamedBeforeItsVoiceKeepsTheOriginal() async throws {
+        let cloud = root.appendingPathComponent("Cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
+        let library = try await library(cloud: cloud)
+        let id = library.newMeeting(title: "Older")
+        await library.acquireLock()
+        let ingested = try await library.ingest(try recording(), into: id, provenance: .file(source: .microphone))
+        library.releaseLock()
+        let track = try XCTUnwrap(ingested.track)
+        let speaker = speaker
+        library.update(id) { meeting in
+            meeting.transcripts = [TrackTranscript(trackID: track.id, segments: [
+                TranscriptSegment(trackID: track.id, start: 0.5, end: 7.5, text: "hello there", speakerID: speaker)])]
+            meeting.speakers = [Speaker(id: speaker, name: "Speaker 1", sourceTrackID: track.id)]
+        }
+        try await library.flushDurably()
+        var now = Date()
+        try await pass(library, at: now)
+        let listener = RecordingCompressionListener(model: "parakeet/test", isDeterministic: true) { _, spans in
+            spans.map { _ in (0..<40).map { "word\($0)" }.joined(separator: " ") }
+        }
+        let compressed = await library.compressRecordings([track.id], in: id, device: library.sync?.deviceID, listener: listener)
+        XCTAssertEqual(compressed, [track.id])
+        library.renameSpeaker(speaker, to: "Vlad", in: id)
+        XCTAssertEqual(library.meeting(id)?.awaitsVoiceForNamedSpeaker, true)
+        let held = await library.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(held, [id])
+        // And while a voiceprint holds something else (learned from a conversation never on this Mac).
+        let elsewhere = Voiceprint(id: "vp-elsewhere", profileID: UUID(), origin: .named, vector: VoiceVector(space: "space", values: [0, 1]),
+                                   meetingID: UUID(), speakerID: "run:9", trackID: UUID(), speechSeconds: 6.5, recordedAt: Date())
+        library.updateMetadata { $0.voiceprints = [LibraryValue(id: elsewhere.id, value: elsewhere)] }
+        let both = await library.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(both?.contains(id), true)
+        library.updateMetadata { $0.voiceprints = [] }
+        let object = cloud.appendingPathComponent("Blobs/\(track.sha256)")
+        for _ in 0..<4 {
+            now = now.addingTimeInterval(60)
+            try await pass(library, at: now)
+        }
+        now = now.addingTimeInterval(3 * day)
+        try await pass(library, at: now)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "its voice isn't known yet")
+        let waiting = await library.sync?.engine?.supersededState()
+        XCTAssertEqual(waiting?.objects.isEmpty, true)
+        // Given its voice: its profile learns from it, and the clip of its speech is cut from the original still here.
+        library.update(id) { _ = $0.giveVoices([speaker: [1, 0]], space: "space", model: "test") }
+        XCTAssertEqual(library.meeting(id)?.awaitsVoiceForNamedSpeaker, false)
+        await coordinators.last?.refresh()
+        XCTAssertFalse((library.metadata.voiceprints ?? []).isEmpty, "learned from the name")
+        let made = await library.makeVoiceClips(olderThan: .distantFuture)
+        XCTAssertEqual(made, 1)
+        for _ in 0..<4 {
+            now = now.addingTimeInterval(60)
+            try await pass(library, at: now)
+        }
+        let confirmed = await library.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(confirmed, [])
+        let listed = await library.sync?.engine?.supersededState()
+        let since = try XCTUnwrap(listed?.objects[track.sha256]?.acknowledgedSince)
+        try await pass(library, at: since.addingTimeInterval(day + 60))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
+    }
+
+    /// A Mac that may delete with no speaker-profile coordinator to ask deletes nothing; and one whose profiles aren't
+    /// settled right before deleting asks for a reconciliation, so a change it doesn't hear of (processing ending, an
+    /// option) doesn't keep deletion waiting until the library next changes.
+    func testBehaviorUnsettledOrMissingSpeakerProfilesAskForAReconciliation() async throws {
+        let (library, object, since, _) = try await listed()
+        try await pass(library, at: since.addingTimeInterval(day - 60))
+        library.speakerProfileCoordinator = nil
+        try await single(library, at: since.addingTimeInterval(day + 60))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "nothing to ask")
+        var skipped: Set<UUID> = [UUID()]
+        let coordinator = SpeakerProfileCoordinator(library: library, options: { SpeakerProfileOptions(recognizes: false) }, skipping: { skipped })
+        coordinator.delay = .milliseconds(20)
+        library.speakerProfileCoordinator = coordinator
+        await coordinator.refresh()
+        // Processing ended elsewhere: nothing in the library changed, so nothing it watches says so.
+        skipped = []
+        XCTAssertTrue(coordinator.pendingVoiceWork.unsettled)
+        try await single(library, at: since.addingTimeInterval(day + 120))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "not settled")
+        for _ in 0..<300 where coordinator.pendingVoiceWork.unsettled { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(coordinator.pendingVoiceWork.unsettled, "it reconciled when asked")
+        try await single(library, at: since.addingTimeInterval(day + 180))
         XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
     }
 

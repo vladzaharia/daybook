@@ -254,6 +254,9 @@ public actor LibrarySyncEngine {
     /// Thrown in the coordinated delete of a superseded original, after its object went (tests stop it there).
     var supersededDeleteFault: (@Sendable () throws -> Void)?
     func setSupersededDeleteFault(_ fault: (@Sendable () throws -> Void)?) { supersededDeleteFault = fault }
+    /// Tests make saving the conversations changed since the last check fail.
+    var supersededRememberFault: (@Sendable () throws -> Void)?
+    func setSupersededRememberFault(_ fault: (@Sendable () throws -> Void)?) { supersededRememberFault = fault }
     func setCompactionPolicy(_ policy: SyncCompactionPolicy?) { compactionPolicy = policy }
 
     /// `waitsForListing`: in the iCloud container, a library (`daybook-sync.json`) isn't created until

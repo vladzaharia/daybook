@@ -1,5 +1,31 @@
 # Validation record
 
+## Superseded originals: a speaker named before its voice holds too (2026-11-22, seventh round)
+
+The sixth review's blocker and follow-ups, on `storage/icloud-cleanup`. A conversation with a speaker named before its
+voice was known (`Meeting.awaitsVoiceForNamedSpeaker`) holds its originals in iCloud, the sealer's rotations included,
+as compression holds it. Compared item by item with what keeps a recording from being compressed
+(`RecordingCompressionEligibility.decide`, `RecordingCompressionPlanner.facts`), the deletion also lacked fields this
+version can't read on the conversation or a recording; those now hold its originals too. The rest are matched (Never,
+settings applied, every device compressing, the clock, the Trash, busy through what speaker profiles leave alone and
+the pass's changes, voice profiles, every recording verified and uploaded) or are readiness for compressing (failed,
+not done, untranscribed, no summary or speakers, an open request, an Upgrade offered, too recent) that nothing serves
+from iCloud's original after the fact: processing reads the conversation's own file. Speaker profiles not settled
+right before deleting now ask for a reconciliation; a Mac with none to ask deletes nothing; the conversations changed
+since the last check are compared with what's saved, so a save that failed is tried again, and nothing comes due until
+one succeeds.
+
+**Verified.** `SupersededObjectsTests` (77): a failed save of what changed saved on the next pass and still known after
+a relaunch; nothing due while it isn't saved; a conversation with a field this version can't read keeping its
+original. `SupersededOriginalsLibraryTests` (6): a speaker named after compression, found without a voice, keeping the
+original past its day (alone, and beside another voiceprint's hold) and letting it go once given its voice and its clip
+is in iCloud; no coordinator deleting nothing; unsettled profiles asking for the reconciliation that lets the next pass
+delete. 8 mutations (`scratchpad/mut/icloud-r7.py`), each failing a test.
+
+**Found, not changed here.** `finishCompressions` lets a Mac's own original go without asking
+`awaitsVoiceForNamedSpeaker`; iCloud's copy now stays for it, but no clip can be cut (clips come only from a local
+original), so iCloud keeps it until the conversation stops holding it.
+
 ## Superseded originals: a name given is a voiceprint first (2026-11-22, sixth round)
 
 The fifth review's blocker and follow-ups, on `storage/icloud-cleanup`. A conversation changed (or not brought up to

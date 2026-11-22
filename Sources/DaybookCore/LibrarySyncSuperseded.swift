@@ -246,6 +246,8 @@ struct SupersededRuntime {
     /// pass adds its own, and only a pass that reaches the restart (`runSupersededObjects`) clears them, so one that ends
     /// in a trim, a withdrawal, or an early return doesn't lose them. Kept with the waits too, across a relaunch.
     var unrestarted: Set<UUID> = []
+    /// Saving those failed: nothing comes due until a save of them succeeds.
+    var unrestartedUnsaved = false
     /// The epoch a new record of waits begins with, in this process.
     var freshEpoch = UUID().uuidString
     /// What each Trash conversation's files said, by path, while its stamp holds (`digestsNamedHere`).
@@ -459,15 +461,23 @@ extension LibrarySyncEngine {
 
     /// Remembers the conversations this pass changed or couldn't bring up to date until a pass restarts their originals'
     /// waits (`SupersededRuntime.unrestarted`), with the waits when there are any.
+    /// Compared with what's saved, not with memory, so a save that failed is tried again on the next pass; until one
+    /// succeeds, nothing comes due (`unrestartedUnsaved`).
     func rememberChangedConversations(_ input: CompactionInput) {
         guard audioPolicy == .eager, device?.deviceClass == .mac else { return }
-        let ids = input.changed.union(input.unapplied)
-        guard !ids.isSubset(of: supersededRuntime.unrestarted) else { return }
-        supersededRuntime.unrestarted.formUnion(ids)
-        guard let url = supersededStateURL, let data = try? Data(contentsOf: url),
-              var saved = try? JSONDecoder().decode(SupersededObjectsState.self, from: data), saved.schemaVersion == 4 else { return }
+        supersededRuntime.unrestarted.formUnion(input.changed.union(input.unapplied))
+        guard !supersededRuntime.unrestarted.isEmpty, let url = supersededStateURL, let data = try? Data(contentsOf: url),
+              var saved = try? JSONDecoder().decode(SupersededObjectsState.self, from: data), saved.schemaVersion == 4,
+              !supersededRuntime.unrestarted.isSubset(of: saved.unrestarted ?? []) else { return }
         saved.unrestarted = (saved.unrestarted ?? []).union(supersededRuntime.unrestarted)
-        try? saveSupersededState(saved)
+        do {
+            try supersededRememberFault?()
+            try saveSupersededState(saved)
+            supersededRuntime.unrestartedUnsaved = false
+        } catch {
+            supersededRuntime.unrestartedUnsaved = true
+            Self.log.error("Couldn't save the conversations changed since the last check: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// What a sync pass on the compacting Mac says of its own notice: there but unreadable (damaged, too large, or not
@@ -706,9 +716,13 @@ extension LibrarySyncEngine {
     /// The live conversations' recordings held as compressed copies, by the original they replaced, and every SHA-256 a
     /// track names as its file here (the Trash included); nil when a conversation here can't be read.
     func supersededFacts(_ meetings: [Meeting], deleted: Set<UUID>) -> (byOriginal: [String: [SupersededOriginal]], held: Set<String>)? {
-        guard let held = digestsNamedHere(meetings) else { return nil }
+        guard var held = digestsNamedHere(meetings) else { return nil }
         var byOriginal: [String: [SupersededOriginal]] = [:]
         for meeting in meetings where !deleted.contains(meeting.id) {
+            // What this version can't read on the conversation or a recording might say to keep it, as for compressing.
+            if !meeting.unknownFields.isEmpty || meeting.tracks.contains(where: { !$0.unknownFields.isEmpty || !$0.$source.isKnown }) {
+                held.formUnion(meeting.tracks.compactMap { $0.encoding?.previousSHA256 })
+            }
             let directory = localRoot.appendingPathComponent("Meetings/\(meeting.id.uuidString)", isDirectory: true)
             for track in meeting.tracks {
                 guard let encoding = track.encoding, SyncFiles.isHash(encoding.previousSHA256), SyncFiles.isHash(track.sha256),
@@ -817,6 +831,7 @@ extension LibrarySyncEngine {
         let step = supersededClockStep(state, now: now, clock: clock)
         if case .watched(let seconds) = step { state.watched += seconds } else { state.wokeAt = now }
         state.lastCheck = now; state.lastClock = clock
+        let unsaved = supersededRuntime.unrestartedUnsaved
         // What this pass, or one since the last that got this far, changed or couldn't bring up to date.
         let changed = input.changed.union(input.unapplied).union(supersededRuntime.unrestarted).union(state.unrestarted ?? [])
         state.unrestarted = nil
@@ -899,11 +914,12 @@ extension LibrarySyncEngine {
             }
         }
         supersededRuntime.unrestarted = []
+        supersededRuntime.unrestartedUnsaved = false
         // What the pass read, and of that what it applied (a conversation whose own change couldn't be published wasn't).
         let known = Set(input.events.keys).union(input.metadata.keys).union(compactionRuntime.prunedIDs)
         let applied = known.subtracting(input.events.filter { input.unapplied.contains($0.value.meetingID) }.keys)
         // Nothing comes due in a pass whose notice isn't in iCloud as it stands.
-        for (original, candidate) in state.objects where noticed && !unjudged.contains(original) {
+        for (original, candidate) in state.objects where noticed && !unsaved && !unjudged.contains(original) {
             guard let acknowledged = candidate.acknowledgedSince, let mark = candidate.acknowledgedWatched,
                   Self.supersededWaitPassed(since: candidate.since, watched: candidate.sinceWatched, now: now, state: state),
                   Self.supersededWaitPassed(since: acknowledged, watched: mark, now: now, state: state),

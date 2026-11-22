@@ -252,12 +252,15 @@ extension LibraryController {
     /// the Trash included. What the sealer keeps through key rotations (`LibrarySyncEngine.holdOriginalsInICloud`) and
     /// what cleaning superseded originals out of iCloud leaves alone (docs/icloud-sync.md, "Voice clips").
     /// Nil when a conversation in the Trash can't be read: a voiceprint may have followed a recording through it.
+    /// A conversation whose speaker was named before its voice was known holds too: its profile learns from it once the voice
+    /// is made, and the clip from the original (`Meeting.awaitsVoiceForNamedSpeaker`, as compression holds it).
     public func meetingsHoldingOriginalsInICloud() async -> Set<UUID>? {
+        let awaiting = Set(meetings.filter(\.awaitsVoiceForNamedSpeaker).map(\.id))
         // The Trash is read only when a voiceprint holds a recording back at all.
-        guard await !voiceProtectedMeetings(lineage: [], requiringUpload: true).mark.holding.isEmpty else { return [] }
+        guard await !voiceProtectedMeetings(lineage: [], requiringUpload: true).mark.holding.isEmpty else { return awaiting }
         let root = rootURL
         guard let trashed = await Task.detached(priority: .userInitiated, operation: { Self.readableTrash(in: root) }).value else { return nil }
-        return await voiceProtectedMeetings(lineage: trashed, requiringUpload: true).meetings
+        return await voiceProtectedMeetings(lineage: trashed, requiringUpload: true).meetings.union(awaiting)
     }
 
     /// What the library says of letting superseded originals go from iCloud (`SupersededJudgment`): stop under Never, or
