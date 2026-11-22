@@ -76,6 +76,9 @@ error; a Trash conversation that can't be read keeps everything; the wait uses t
   and an on-demand replica needing the object itself rather than a journal entry to publish a possibly gone one by
   reference.
 
+Also `swift build` and the iPhone app's simulator build (`scripts/build-ios.sh`, with the watch app), since the engine
+changes are shared.
+
 **Not done as asked, and why.** An upload of a possibly gone object is still skipped when the object is in the sync
 folder: writing the same bytes over an object iCloud lists (often dataless) can't be checked without real iCloud, and
 wouldn't keep a later deletion from taking it. Instead the device holds it in its presence, never lets its file go, and
