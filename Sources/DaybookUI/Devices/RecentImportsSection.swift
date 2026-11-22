@@ -10,6 +10,8 @@ public struct RecentImportsSection: View {
     private let session: DeviceSession
     private let limit: Int
     @Environment(\.recorderServices) private var services
+    @Environment(\.daybookDensity) private var density
+    @State private var hovered: UUID?
 
     public init(session: DeviceSession, limit: Int = 10) {
         self.session = session
@@ -71,8 +73,8 @@ public struct RecentImportsSection: View {
         return Button { if meeting != nil { services?.showConversation(item.meetingID) } } label: {
             RecentImportRow(symbol: "checkmark.circle.fill", symbolInk: DaybookPalette.Ink.meta) {
                 Text(meeting?.title ?? Self.label(item, session: session))
-                    .daybookFont(.body)
-                    .foregroundStyle(meeting == nil ? DaybookPalette.Ink.body : DaybookPalette.Ink.link)
+                    .daybookFont(density == .touch ? .body : .rowTitle)
+                    .foregroundStyle(meeting != nil && (density == .touch || hovered == item.trackID) ? DaybookPalette.Ink.link : DaybookPalette.Ink.body)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 if meeting != nil {
@@ -87,6 +89,9 @@ public struct RecentImportsSection: View {
             }
         }
         .buttonStyle(.plain)
+        #if os(macOS)
+        .onHover { hovered = $0 ? item.trackID : nil }
+        #endif
         .accessibilityHint(meeting == nil ? "" : "Opens the conversation")
         .contextMenu {
             if meeting != nil {
