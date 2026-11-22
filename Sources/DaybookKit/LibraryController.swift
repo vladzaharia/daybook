@@ -990,10 +990,13 @@ public final class LibraryController {
         // it hears of); a conversation they leave alone for now (recording, processing) holds its originals.
         if let engine = sync.engine, await engine.hasSupersededObjectsDue {
             let current = await settingsAreCurrent()
+            let judge = applied?.acknowledged == true && supersededJudgment(settingsCurrent: current) == .judge
+            // What the library holds is read last, then the speaker profiles' word, with nothing awaited until the deletion
+            // takes them and the conversations (a name given meanwhile counts).
+            let held = judge ? await meetingsHoldingOriginalsInICloud() : nil
             let voices = speakerProfileCoordinator?.pendingVoiceWork
             if voices?.unsettled == true { speakerProfileCoordinator?.schedule() }
-            if applied?.acknowledged == true, supersededJudgment(settingsCurrent: current) == .judge, !(voices?.unsettled ?? true),
-               let held = await meetingsHoldingOriginalsInICloud() {
+            if judge, !(voices?.unsettled ?? true), let held {
                 await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held.union(voices?.skipped ?? []))
             } else {
                 await engine.discardSupersededObjectsDue()

@@ -5345,3 +5345,13 @@ Review fixes (same day): the guarantee now holds for the conversation, not only 
 
 Needs a real device: the 150 ms margin against a Bluetooth headset's real latency; iOS ending Daybook during a long pause
 and the Live Activity's Resume after it.
+
+## 2026-11-22: Voice holds on the Mac's own original (follow-up to #123)
+
+- A speaker named after a recording's copy was made, in a run with no voice, now keeps this Mac's own original until the
+  voice is given and its clip is cut (`finishCompressions` and the replace ask `voiceProtectedMeetings`, which includes
+  `Meeting.awaitsVoiceForNamedSpeaker`); the new test failed without the change.
+- The sync pass reads what the library holds last, then the speaker profiles' word, with nothing awaited before the
+  deletion. No test: nothing in the pass lets a rename land between those reads, and a sleep-based one would prove nothing.
+- A conversation with fields from a newer version holds its originals in iCloud for the sealer's key rotations too, one
+  rule in `meetingsHoldingOriginalsInICloud`.

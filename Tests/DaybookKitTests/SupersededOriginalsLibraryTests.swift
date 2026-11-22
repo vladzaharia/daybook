@@ -261,6 +261,20 @@ final class SupersededOriginalsLibraryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: object.path))
     }
 
+    /// A conversation carrying fields this version can't read holds its originals in iCloud for the sealer too, as for the
+    /// deletion, until the fields are gone.
+    func testBehaviorAConversationWithFieldsFromANewerVersionHoldsItsOriginalsInICloud() async throws {
+        let (library, _, _, id) = try await listed()
+        let none = await library.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(none, [])
+        library.update(id) { $0.unknownFields = UnknownFields(["future": .string("a")]) }
+        let held = await library.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(held, [id])
+        library.update(id) { $0.unknownFields = UnknownFields() }
+        let released = await library.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(released, [])
+    }
+
     /// A Mac that may delete with no speaker-profile coordinator to ask deletes nothing; and one whose profiles aren't
     /// settled right before deleting asks for a reconciliation, so a change it doesn't hear of (processing ending, an
     /// option) doesn't keep deletion waiting until the library next changes.
