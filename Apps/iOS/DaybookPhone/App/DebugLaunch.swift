@@ -13,6 +13,7 @@ import SwiftUI
 ///     --demo-notes               type a few notes and add bookmarks while recording
 ///     --stop-after <seconds>     stop the recording after this long
 ///     --simulate-interruption <seconds>   a call interrupts the recording after this long and ends 4 s later (synthetic audio only)
+///     --pause-after <seconds>             the person pauses the recording after this long (synthetic audio only)
 ///     --demo-multipoint <Mac name>        show the recording as also recording on that Mac (no network)
 ///     --demo-levels              with --demo-multipoint: that Mac sends stand-in levels, so the recorder meters it beside
 ///                                the microphone (no network; as the Mac's `--notes-demo multipoint` draws its rows); with
@@ -99,6 +100,7 @@ struct DebugLaunch {
     var demoNotes = false
     var stopAfter: TimeInterval?
     var interruptAfter: TimeInterval?
+    var pauseAfter: TimeInterval?
     var demoMultipointMac: String?
     var demoLevels = false
     var demoLink = false
@@ -259,6 +261,7 @@ struct DebugLaunch {
         if has("--caption-probe") { captionProbe = value("--caption-probe") ?? "" }
         stopAfter = value("--stop-after").flatMap(TimeInterval.init)
         interruptAfter = value("--simulate-interruption").flatMap(TimeInterval.init)
+        pauseAfter = value("--pause-after").flatMap(TimeInterval.init)
         demoMultipointMac = value("--demo-multipoint")
         demoLevels = has("--demo-levels")
         // A relative folder is inside the app's temporary directory (handy in the simulator).

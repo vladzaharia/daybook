@@ -4964,3 +4964,72 @@ Delete Now and Empty Trash on both apps: a conversation leaves the Trash only th
 Checked: `LibraryTrashAndFilingTests`, `LibraryWordsTests`, `LibraryStorageReportTests`, `RecordingCompressionLibraryTests`, `swift build`, the iPhone simulator build and `LibraryChromeTests`, and before/after pictures of each visible change. Not checked: Empty Trash against a real iCloud library with a second device (that the tombstone and compaction remove the iCloud objects as for any deletion), VoiceOver on the new menu items.
 
 Review fixes (same day): a conversation deleted for good leaves `Trash/<id>` holding only its tombstone (`deleted.json`, `TrashTombstone`), so it goes at once, synced or not and with sync off (no "waiting for sync"), and never comes back: not by staging recovery on the Mac or the iPhone's leftover filing (both delete its leftovers), `LibraryController.add`, a sync pass (no re-download; the tombstone is published), or a new journal after Start Over or a replaced library. The Trash list, its counts, `hasTrashedMeetings`, Restore, and Storage's Trash figure skip tombstones and folders that can't be read or that a newer Daybook wrote (those are kept, never deleted). The tombstone is written durably before anything goes; the rest moves into `Trash/.deleting-…` and is removed, and the library's next open finishes what a crash left. Each conversation is deleted on its own and the notice says how many went and how many couldn't. Delete Now on a row the Personal lock hides, and Empty Trash when it hides any, ask to unlock first. Compression's lineage reads tombstones, so a voice profile's audio duplicated elsewhere stays protected after its conversation is deleted. On the Mac, Empty Trash… moved from the window's toolbar to the end of the Trash list's first header, and a Move to Trash's Undo (Edit menu, notice) stops offering what was deleted. Checked: `TrashDeletionTests` (a synced Mac and iPhone; sync off; a deletion before the Trash synced; a new journal; a crash partway; per-conversation failure, unreadable and newer folders; the Personal lock; compression's protection), `LibraryTrashAndFilingTests`, `LibraryWordsTests`, `LibraryStorageReportTests`, `RecordingCompressionPlannerTests`, `RecordingCompressionLibraryTests`, `PersonalLockTests`, `AppStateTests` (staging recovery after deletion, Undo), `LibrarySyncApplyTests`, `MeetingStoreTests`, `LibraryControllerTests`, `MergeConversationsTests`, the iPhone's `StagingProtectionTests` (a leftover for a conversation deleted for good), `ReadingTests` and `LibraryChromeTests`, and pictures of the Mac Trash at both widths. Not checked: Start Over itself (the test connects a fresh container, which starts from an empty checkpoint as Start Over does), two real devices over iCloud, Touch ID or Face ID prompts before Delete Now, and a deletion interrupted by a real power loss.
+
+## 2026-11-21: The person's own Pause (REC-10)
+
+Pause and Resume on the Mac (Floating Notes beside Stop, Resume in the compact panel; the toolbar beside the Stop pill;
+File and the menu bar extra) and on the iPhone (the recorder's clock row, table mode beside Stop, the Live Activity),
+offered only while nothing records along (docs/capture.md, "Pausing"; docs/iphone.md, "Pausing").
+
+Verified (synthetic audio, fake sources and clocks, temporary libraries; no models):
+- The Mac (`CapturePauseTests`): a tone through a pause leaves both tracks their full length, sample-aligned, with
+  exactly zero from 5 ms after Pause until Resume and the tone either side; captions are given every buffer, silent
+  through the pause, and a buffer that straddles Pause is silenced from the frame it falls on; Pause, Resume, and Stop
+  in every order (Stop while paused ends the pause at the end); the meters rest, the hearing check doesn't fire through
+  a 30 s pause and counts from Resume, and a source that keeps delivering is never restarted; a crash while paused
+  (the files copied as they were on disk) recovers with the pause, ended where the audio ends, and nothing of it.
+- The Mac app (`MacPauseTests`): offered alone, not while a recorder records along or is being asked, still offered
+  when the recorder couldn't record; a recorder whose button joins during a pause leaves it paused; phones hear
+  `paused` with the length at Pause; Floating Notes says Paused with a frozen clock.
+- The iPhone (`PersonPauseTests`, simulator): the microphone stops, the tap hears nothing, a call that comes and goes
+  doesn't resume it, the joined file is silent through the pause and keeps the timeline; a crash while paused recovers
+  what came before; offered only alone (`recordsAlone`); nothing posted and no resume when Daybook comes to the front;
+  the Live Activity offers Pause only while recording alone and an earlier build's state offers none.
+- Existing suites, each on its own: Mac `CaptureTests`, `CaptureResilienceTests`, `RecordingControllerTests`,
+  `SystemAudioSelectionTests`, `CaptureFinalizerTests`, `CallIngestTests`, `InterruptedCaptureTests`,
+  `MicrophoneRestartTests`, `LiveCaptionsTests`, `MultipointRecordingTests`, `CascadingRecordingTests`,
+  `MacFirstMultipointTests`, `PhoneLinkTests`, `FloatingNotes*Tests`, `MenuBarStatusTests`, `AppStateTests`,
+  `RecorderSurfaceTests`; iPhone `RecordingInterruptionsTests`, `PhoneRecorderTests`, `RecordingSurfacesTests`,
+  `CaptureRecoveryTests`, `ShellTests`, `RecorderActivityTests`, `CascadingRecordingTests`.
+- `DAYBOOK_HARDWARE_TESTS=1 swift test --filter MicrophoneHardwareTests` on this Mac's built-in microphone (already
+  allowed, so no prompt; about 11 s of the room, counted and kept nowhere): 3 passed. It doesn't pause.
+- Snapshots of a simulated recording (`--simulate-recording … --pause-demo offered|paused`) and the iPhone simulator
+  with synthetic audio (`--synthetic-audio --start-recording --demo-notes --pause-after 13`).
+
+Needs a real device: a pause and resume on a Mac's own microphone and call audio (the menu bar's microphone indicator
+stays on through a pause); an iPhone pausing from the Live Activity in the pocket, staying suspended, and resuming from
+the Lock Screen (`AudioRecordingIntent` starting the microphone in the background); a pause of an hour or more.
+Not built: pausing a recording other devices record along with (a link request, recorders that pause without ending
+their file, the Watch); see docs/capture.md, "Pausing".
+
+Review fixes (same day): the guarantee now holds for the conversation, not only each device's own tracks.
+- Nothing joins a paused recording (M1): on the Mac a recorder's own button records on its own and a phone's start for
+  the conversation is refused (`busy`); on the iPhone a recorder's button doesn't join, a Mac's start is refused, and
+  the Watch isn't told of the recording (`PhoneWatch.withholdsRecording`). After Resume, joining works as before.
+  `MacPauseTests` (the earlier test that called a recorder joining during a pause correct is replaced),
+  `CascadingRecordingTests` (iPhone), `PhoneWatchTests`.
+- The iPhone counts a connected Mac that says it records its conversation, asked or not, as company, and refuses a
+  Mac's start while paused (M2). A recorder whose start didn't confirm is company on the Mac until its own status, read
+  live, says it isn't recording (M3).
+- Second line: a recording from another device, or a file matched by time or sound, never joins a conversation over a
+  span the person paused it; it joins only with a known start well clear of every pause (30 s), otherwise it's its own
+  conversation (`PersonPause.admits`; `PersonPauseSpanTests`, `MacPauseTests`). Silencing its audio there was not
+  chosen: a recorder's clock and sound alignment can't place it within milliseconds.
+- The silence runs from 50 ms before Pause to 150 ms after Resume, the clock is read under the pauses' lock, and a
+  buffer without a host time is stamped now less its length (L1, L2). The iPhone's Live Activity Pause has no
+  timestamp of its own (App Intents give none), so the pause starts when the intent runs.
+- Words heard wholly inside a pause are left out of the transcript on both apps (L3, `InferenceProcessingEngineTests`);
+  the compression check compares two fresh transcriptions over kept passages, so it isn't affected.
+- A recording the person paused when iOS ended Daybook is filed as if Stop had ended it at the pause, without "Daybook
+  quit while recording"; a Resume tapped on the leftover Live Activity says "That recording has ended."; Pause refused
+  because another device records says so (L4, L5; `PersonPauseTests`).
+- Tests that couldn't fail now can: the fade-in is checked against the ramp, the iPhone's microphone keeps delivering
+  after it's stopped (which found that captions heard what an input handed over after Pause; now nothing does), both
+  halves of the buffer straddling Pause are checked; added Resume mid-buffer, a buffer
+  delivered after Pause, a microphone that changes format during a pause (L6). The new Mac tests were run against the
+  code without each fix and failed.
+- The person's pause no longer shows a second grey "Paused" box above Resume Recording (Floating Notes, the iPhone
+  recorder); a call's pause keeps its box and words.
+
+Needs a real device: the 150 ms margin against a Bluetooth headset's real latency; iOS ending Daybook during a long pause
+and the Live Activity's Resume after it.

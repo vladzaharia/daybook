@@ -177,6 +177,7 @@ private final class FakeCommands: RecordingCommandHandling {
   isRecordingActive = false
  }
  func resumeRecording() async throws { calls.append("resume") }
+ func pauseRecording() async throws { calls.append("pause") }
  func addBookmark() async throws -> TimeInterval {
   calls.append("bookmark")
   return 0

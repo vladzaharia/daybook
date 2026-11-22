@@ -102,6 +102,8 @@ extension MultipointCoordinator {
     func recorderButton(_ recorderSession: DeviceSession, _ on: Bool) {
         guard recorderSession.managedElsewhere == nil, recorderSession.device.recordsAlongsideMac else { return }
         if on {
+            // Paused by the person, nothing joins: the recorder's recording is its own (docs/iphone.md, "Pausing").
+            if recorder.isPausedByPerson { return }
             if recorder.isActive, let id = recorder.captureID {
                 devices.cascade.join(recorderSession, conversation: id)
                 return

@@ -73,6 +73,9 @@ final class PhoneTrackWriter: @unchecked Sendable {
         lock.withLock { accepting = value }
     }
 
+    /// Whether it takes audio now: off from a pause until the input starts again.
+    var isAcceptingAudio: Bool { lock.withLock { accepting } }
+
     /// Called on the input's thread.
     func append(_ buffer: AVAudioPCMBuffer, hostTime: TimeInterval) {
         guard lock.withLock({ accepting }) else { return }

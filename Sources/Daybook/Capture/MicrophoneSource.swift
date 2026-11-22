@@ -240,9 +240,10 @@ final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
                 report(.failed(RecordingError.invalidAudio))
                 return
             }
+            // Without a host time, now less the buffer's length: about when its first frame was captured.
             let hostSeconds = time.isHostTimeValid
                 ? AVAudioTime.seconds(forHostTime: time.hostTime)
-                : CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
+                : CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) - Double(buffer.frameLength) / format.sampleRate
             deliver(copied, hostSeconds)
         }
         engine.prepare()

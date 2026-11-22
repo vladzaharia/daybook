@@ -19,6 +19,10 @@ import Foundation
 ///
 /// A buffer in a different format (a device switch, AirPods changing profile) is converted to the
 /// file's format so the recording continues; the next anchor is marked as a resync.
+///
+/// While the person has paused the recording (`CapturePauses`), what the source captured is written as silence before
+/// anything else looks at it, so the track keeps its length and its clock and never holds what was said; each silence
+/// ramps down over 5 ms from the sound before it, and the sound after it fades in over 5 ms, so neither seam clicks.
 final class PCMTrackWriter: @unchecked Sendable {
     struct Outcome { var track: CapturedAudioTrack?; var error: String? }
     /// Where writing stands, in the host times stamped on the buffers.
@@ -64,6 +68,12 @@ final class PCMTrackWriter: @unchecked Sendable {
     private var lastSamples: [Float]?
     private let maximumBacklog: TimeInterval
     private let beforeWrite: (@Sendable () -> Void)?
+    /// The person's pauses: what's captured during one is written as silence, and the meter doesn't hear it.
+    private let pauses: CapturePauses?
+    /// The last frame of the source's audio as it was written (silenced where paused), per channel, in the source's
+    /// format, and whether it fell in a pause: the next buffer's seams ramp from it.
+    private var lastInputFrame: [Float]?
+    private var inputEndedPaused = false
     // Shared with the input's thread under `progressLock`.
     private let progressLock = NSLock()
     private var shared = Progress()
@@ -82,7 +92,7 @@ final class PCMTrackWriter: @unchecked Sendable {
     /// `beforeWrite` runs on the writing queue before each buffer (tests stall the disk with it).
     init(role: CapturedTrackRole, directory: URL, manifest: CaptureSessionManifest, method: String? = nil,
          maximumBacklog: TimeInterval = PCMTrackWriter.defaultBacklog, beforeWrite: (@Sendable () -> Void)? = nil,
-         failure: @escaping (Error) -> Void) {
+         pauses: CapturePauses? = nil, failure: @escaping (Error) -> Void) {
         self.role = role
         self.url = directory.appendingPathComponent(role.rawValue + ".caf")
         self.metadataURL = directory.appendingPathComponent(role.rawValue + ".json")
@@ -90,6 +100,7 @@ final class PCMTrackWriter: @unchecked Sendable {
         self.method = method
         self.maximumBacklog = maximumBacklog
         self.beforeWrite = beforeWrite
+        self.pauses = pauses
         self.failure = failure
     }
 
@@ -114,8 +125,8 @@ final class PCMTrackWriter: @unchecked Sendable {
             defer { droppedSinceAccepted = 0 }
             return droppedSinceAccepted
         }
-        // The meter hears what the source delivers, written or not.
-        meter.record(buffer, hostTime: hostTimeSeconds)
+        // The meter hears what the source delivers, written or not; never what it captured during a pause.
+        if pauses?.overlaps(from: hostTimeSeconds, seconds: seconds) != true { meter.record(buffer, hostTime: hostTimeSeconds) }
         guard let lostBefore else { return }
         queue.async { [self] in
             defer {
@@ -152,7 +163,9 @@ final class PCMTrackWriter: @unchecked Sendable {
     }
 
     /// `lost` is how much audio was dropped just before this buffer, which its gap then stands for.
-    private func write(_ input: AVAudioPCMBuffer, hostTimeSeconds: TimeInterval, lost: TimeInterval = 0) throws {
+    private func write(_ captured: AVAudioPCMBuffer, hostTimeSeconds: TimeInterval, lost: TimeInterval = 0) throws {
+        // What was captured during a pause is silence from here on, before it's converted, timed, or written.
+        let input = silencingPauses(captured, at: hostTimeSeconds)
         // Moves on past audio a backward clock jump overlaps.
         var hostTimeSeconds = hostTimeSeconds
         if file == nil {
@@ -243,6 +256,55 @@ final class PCMTrackWriter: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// `captured` with what fell in a pause silent (and its seams ramped), remembering how it ended for the next buffer.
+    private func silencingPauses(_ captured: AVAudioPCMBuffer, at host: TimeInterval) -> AVAudioPCMBuffer {
+        guard let pauses else { return captured }
+        let ranges = pauses.pausedFrames(from: host, frames: Int(captured.frameLength), rate: captured.format.sampleRate)
+        let previous = lastInputFrame.flatMap { $0.count == Int(captured.format.channelCount) ? $0 : nil }
+        let buffer = Self.silenced(captured, paused: ranges, previous: previous, afterPause: inputEndedPaused) ?? captured
+        lastInputFrame = Self.lastFrame(of: buffer)
+        inputEndedPaused = ranges.last.map { $0.upperBound >= Int(captured.frameLength) } ?? false
+        return buffer
+    }
+
+    /// A copy of `buffer` with the frames in `paused` (in order) silent: nil when there are none and no fade-in is owed.
+    /// Float audio ramps at each seam over `rampSeconds`: a silence from the sample before it (`previous` at the
+    /// buffer's start), and the audio after a silence (`afterPause` at the buffer's start) up from zero.
+    static func silenced(_ buffer: AVAudioPCMBuffer, paused: [Range<Int>], previous: [Float]?, afterPause: Bool) -> AVAudioPCMBuffer? {
+        let length = Int(buffer.frameLength)
+        let startsAudible = (paused.first?.lowerBound ?? length) > 0
+        guard !paused.isEmpty || (afterPause && startsAudible), let copy = copy(buffer) else { return nil }
+        CapturePauses.zero(copy, paused)
+        guard buffer.format.commonFormat == .pcmFormatFloat32, let data = copy.floatChannelData else { return copy }
+        let channels = Int(buffer.format.channelCount), interleaved = buffer.format.isInterleaved
+        let ramp = max(1, Int((rampSeconds * buffer.format.sampleRate).rounded()))
+        func scale(_ frame: Int, _ factor: Float) {
+            for channel in 0..<channels {
+                if interleaved { data[0][frame * channels + channel] *= factor } else { data[channel][frame] *= factor }
+            }
+        }
+        func set(_ frame: Int, _ values: [Float], _ factor: Float) {
+            for channel in 0..<min(channels, values.count) {
+                if interleaved { data[0][frame * channels + channel] = values[channel] * factor } else { data[channel][frame] = values[channel] * factor }
+            }
+        }
+        for (index, range) in paused.enumerated() {
+            // Down from the sound before it, within the silence.
+            let before = range.lowerBound > 0 ? samples(of: buffer, at: range.lowerBound - 1) : (afterPause ? nil : previous)
+            if let before {
+                let count = min(ramp, range.count / 2)
+                for step in 0..<count { set(range.lowerBound + step, before, 1 - Float(step + 1) / Float(count + 1)) }
+            }
+            // The sound after it fades in, up to the next silence.
+            let next = index + 1 < paused.count ? paused[index + 1].lowerBound : length
+            for step in 0..<min(ramp, next - range.upperBound) { scale(range.upperBound + step, Float(step + 1) / Float(ramp + 1)) }
+        }
+        if afterPause, startsAudible {
+            for step in 0..<min(ramp, paused.first?.lowerBound ?? length) { scale(step, Float(step + 1) / Float(ramp + 1)) }
+        }
+        return copy
     }
 
     /// Silence for a gap, ramping over 5 ms from the last frame written and into `next`'s first, so neither seam

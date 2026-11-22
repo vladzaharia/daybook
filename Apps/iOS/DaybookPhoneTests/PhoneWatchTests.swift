@@ -127,6 +127,24 @@ final class PhoneWatchTests: XCTestCase {
         XCTAssertNil(phoneWatch.session)
     }
 
+    /// While the person has paused this iPhone's recording, the watch isn't told of it, so a Start there is its own.
+    func testBehaviorThePersonsPauseKeepsTheRecordingFromTheWatch() async throws {
+        let rig = try rig()
+        let phoneWatch = try XCTUnwrap(rig.devices.watch)
+        var paused = false
+        phoneWatch.withholdsRecording = { paused }
+        let conversation = UUID(), date = Date(timeIntervalSince1970: 1_800_000_000)
+        rig.devices.cascade.begin(conversation, title: "Standup", date: date, ledHere: true)
+        XCTAssertEqual(phoneWatch.context.sharedRecording?.conversationID, conversation)
+        paused = true
+        XCTAssertNil(phoneWatch.context.sharedRecording, "nothing to join while paused")
+        XCTAssertNil(phoneWatch.phoneContext().sharedRecording, "nor in its answer")
+        XCTAssertNil(rig.devices.hub.environment.watch.sharedRecording(), "nor with a Start from here")
+        paused = false
+        XCTAssertEqual(phoneWatch.sharedRecording?.conversationID, conversation, "after Resume, as before")
+        await rig.devices.cascade.stop()
+    }
+
     /// Recording here records on the watch too, with this conversation; stopping stops it, and its audio, in two parts,
     /// joins the conversation.
     func testRecordingHereRecordsOnTheWatchTooAndItsAudioJoinsTheConversation() async throws {

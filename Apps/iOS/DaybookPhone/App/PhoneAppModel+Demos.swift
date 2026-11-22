@@ -123,6 +123,7 @@ extension PhoneAppModel {
         let notes = options.demoNotes
         let stopAfter = options.stopAfter
         let interruptAfter = options.interruptAfter
+        let pauseAfter = options.pauseAfter
         if let mac = options.demoMultipointMac, let id = recorder.captureID {
             // The paired Mac `applyLinkDemo` made, so its chip is the one Mac recording along.
             let macID = link.macs.first { $0.name == mac }?.id ?? UUID()
@@ -162,6 +163,11 @@ extension PhoneAppModel {
                         _ = try? await self.addBookmark()
                     }
                 }
+            }
+            if let pauseAfter {
+                try? await Task.sleep(for: .seconds(max(0, pauseAfter - (notes ? 11.5 : 0))))
+                guard let self, !Task.isCancelled, self.recorder.isActive else { return }
+                try? await self.pauseRecording()
             }
             if let interruptAfter {
                 try? await Task.sleep(for: .seconds(max(0, interruptAfter - (notes ? 11.5 : 0))))

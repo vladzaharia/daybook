@@ -38,13 +38,21 @@ struct FloatingRecording: View {
             rename: { [state, id = meeting.id] title in state.update(id) { $0.title = title } },
             chips: context.chips,
             meters: FloatingStatus.meters(inputs),
-            clock: .since(state.recordingStartedAt ?? Date()),
+            clock: FloatingRecording.clock(start: state.recordingStartedAt ?? Date(), pausedAt: state.recordingPausedAt),
             isLive: inputs.phase == .recording,
             bookmarkCount: meeting.highlights.filter { $0.trackID == nil }.count,
             canBookmark: !state.isStoppingRecording,
             isSaving: state.isStoppingRecording,
+            pause: state.isRecordingPaused ? RecordingStatusWords.personPaused : nil,
             topInset: context.band,
-            keyboardShortcuts: true)
+            keyboardShortcuts: true,
+            canPause: state.canPauseRecording)
+    }
+
+    /// Live from the start, or frozen where the person paused it.
+    static func clock(start: Date, pausedAt: TimeInterval?) -> RecorderTime {
+        guard let pausedAt else { return .since(start) }
+        return .elapsed(isLive: false, frozenAt: pausedAt, value: { pausedAt })
     }
 
     private var actions: RecorderSurfaceActions {
@@ -52,6 +60,8 @@ struct FloatingRecording: View {
         return RecorderSurfaceActions(
             bookmark: { state.addHighlight(id) },
             stop: { Task { await state.stopRecording() } },
+            resume: { state.resumeRecording() },
+            pause: { state.pauseRecording() },
             addNote: { line in
                 guard let notes = state.meetings.first(where: { $0.id == id })?.notes else { return }
                 state.editNotes(id, text: RecorderNoteField.appending(line, to: notes))

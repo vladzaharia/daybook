@@ -25,7 +25,7 @@ extension StatusOverviewInputs {
         let levels = state.recorder.levels
         let isRecording = meeting.map { state.recordingID == $0.id } ?? false
         if isRecording {
-            inputs.recording.phase = state.isStoppingRecording ? .saving : .recording
+            inputs.recording.phase = state.isStoppingRecording ? .saving : state.isRecordingPaused ? .paused : .recording
         } else if state.isStartingRecording {
             inputs.recording.phase = .starting
         } else if afterStop, let meeting {

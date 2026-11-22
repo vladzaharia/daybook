@@ -171,6 +171,9 @@ extension AppState {
     func recorderButton(_ session: DeviceSession, _ on: Bool) {
         guard isReady, session.managedElsewhere == nil, session.device.recordsAlongsideMac else { return }
         if on {
+            // Paused by the person, nothing joins: the recorder's recording is its own, as it would be with this Mac busy
+            // (docs/capture.md, "Pausing").
+            if isRecordingPaused { return }
             if let id = recordingID { sources.recorders.recorderJoined(session, meetingID: id); return }
             guard !isStartingRecording, !isStoppingRecording, microphoneAccess() == .authorized else { return }
             pendingRecorderLead = session.id

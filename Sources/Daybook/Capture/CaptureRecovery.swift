@@ -61,7 +61,15 @@ enum CaptureRecovery {
         // The system's words for what couldn't be recovered go with what was.
         if !recoveryNotes.isEmpty, !tracks.isEmpty { tracks[0].notes = (tracks[0].notes ?? []) + recoveryNotes }
         let endedAt = tracks.map { $0.startedAt.addingTimeInterval($0.duration) }.max() ?? manifest.startedAt
-        return CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: endedAt,
-                             tracks: tracks, warnings: warnings, directory: directory)
+        // The person's pauses, as the manifest kept them: one still open (Daybook quit while paused) ends with the audio.
+        // What was captured during them is silence in the files already.
+        let pauses = CapturePause.closed(manifest.pauses ?? [], at: endedAt.timeIntervalSince(manifest.startedAt))
+        if !pauses.isEmpty {
+            for index in tracks.indices { tracks[index].notes = (tracks[index].notes ?? []) + pauses.map(\.note) }
+        }
+        var result = CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: endedAt,
+                                   tracks: tracks, warnings: warnings, directory: directory)
+        result.pauses = pauses.isEmpty ? nil : pauses
+        return result
     }
 }

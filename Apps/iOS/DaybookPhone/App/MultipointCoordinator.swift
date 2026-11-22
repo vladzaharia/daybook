@@ -145,6 +145,15 @@ final class MultipointCoordinator {
         return link.connectedMacs.filter { !involved.contains($0.id) && !$0.isRecording }
     }
 
+    /// Why a Mac can't record along with a recording the person paused here.
+    static let pausedHere = "It’s paused on this iPhone."
+
+    /// A connected Mac says it records this iPhone's recording (or is paused in it), asked or not.
+    var macRecordsThis: Bool {
+        guard let id = recorder.captureID else { return false }
+        return link.connectedMacs.contains { $0.recording?.conversationID == id }
+    }
+
     /// The multipoint line for the recording screen: the session, plus any Mac that reports
     /// recording this conversation on its own.
     var line: String? {
@@ -162,7 +171,8 @@ final class MultipointCoordinator {
     /// answer, so whether it started because of this iPhone is never lost. A Mac whose start comes
     /// back after this iPhone stopped, or that never answered, is stopped with it.
     func recordOnMac(_ macID: UUID, cascade: LinkCascade? = nil) async {
-        guard let mac = link.macs.first(where: { $0.id == macID }) else { return }
+        // Paused by the person, nothing joins: a Mac would record what this iPhone leaves out (docs/iphone.md, "Pausing").
+        guard !recorder.isPausedByPerson, let mac = link.macs.first(where: { $0.id == macID }) else { return }
         // This iPhone's own recording, or (in the background) only its recorder's.
         let own = recorder.isCapturing ? recorder.captureID : nil
         guard let id = own ?? recorderOnly?.conversationID else { return }
@@ -408,6 +418,11 @@ final class MultipointCoordinator {
             }
             if recorder.isActive {
                 if recorder.captureID == request.conversationID {
+                    // Paused by the person, nothing joins it: the Mac would keep what this iPhone leaves out
+                    // (docs/iphone.md, "Pausing").
+                    if recorder.isPausedByPerson {
+                        return .refused(LinkRecordRefusal(reason: .busy, message: Self.pausedHere, conversationID: request.conversationID))
+                    }
                     return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: recorder.startedAt,
                                                    recordingID: recordingID, wasAlreadyRecording: true))
                 }

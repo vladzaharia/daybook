@@ -8,7 +8,7 @@ import Foundation
 // Conversation (ConversationEntity.swift), for Shortcuts, Spotlight, and Siri. The iPhone has the same recording
 // intents with the same titles and phrases (Apps/iOS/Shared/RecordingIntents.swift). Start and Stop are
 // AudioRecordingIntents on both, so the system knows they start and stop a recording; the iPhone's Bookmark is a
-// LiveActivityIntent, which the Mac doesn't have, and the Mac has no Resume (a Mac recording doesn't pause). Each runs
+// LiveActivityIntent, which the Mac doesn't have, and the Mac has no Pause or Resume intent (its menus have them). Each runs
 // in the app, on its state (`IntentState`), launching Daybook when it isn't running.
 
 /// The app's state, for intents and Spotlight: the app hands it over once its library window is up
