@@ -496,6 +496,11 @@ public actor MeetingStore {
                 guard passage.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
             }
         }
+        let clipsFolder = directory.appendingPathComponent(VoiceClip.folder, isDirectory: true)
+        for clip in meeting.voiceClips ?? [] {
+            guard clip.relativePath.hasPrefix(VoiceClip.folder + "/") else { throw LibraryError.unsafePath(clip.relativePath) }
+            try LocalFiles.requireContained(try LocalFiles.relativeURL(clip.relativePath, in: directory), in: clipsFolder)
+        }
     }
 }
 

@@ -22,7 +22,7 @@ public enum RecordingCompressionPlanner {
         /// Conversations whose processing status is done.
         public var done: Set<UUID>
         public var upgradeOffered: Set<UUID>
-        /// The voiceprints that hold their recordings back: each whose clip this Mac doesn't hold yet
+        /// The voiceprints that hold their recordings back: each whose source no clip here covers yet
         /// (`LibraryController.holdingBackVoiceprints`).
         public var voiceprints: [Voiceprint]
         /// Conversations no longer in the library (the Trash) whose audio may live on in one that is: a voiceprint's

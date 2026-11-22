@@ -11,6 +11,8 @@ public enum VoiceClipAudio {
         public var sampleRate: Double
         public var channels: Int
         public var ranges: [VoiceClipRange]
+        /// The original's length in frames, which the ranges were clamped to.
+        public var originalFrames: Int64
     }
 
     /// Why a clip wasn't made. Any of them leaves the original as the only copy of that speech, so it's kept.
@@ -51,12 +53,13 @@ public enum VoiceClipAudio {
         let temporary = folder.appendingPathComponent("\(VoiceClips.temporaryPrefix)\(UUID().uuidString).caf")
         do {
             return try await BlockingFileWork.run { isCancelled in
-                let (rate, channels, ranges) = try write(original, spans: spans, to: temporary, isCancelled: isCancelled)
+                let (rate, channels, ranges, length) = try write(original, spans: spans, to: temporary, isCancelled: isCancelled)
                 try DurableFiles.synchronize([temporary])
                 try verify(clip: temporary, original: original, ranges: ranges, rate: rate, channels: channels, isCancelled: isCancelled)
                 let digest = try AudioDigest.sha256(fileURL: temporary, isCancelled: isCancelled)
                 let size = Int64((try? temporary.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-                return Extracted(url: temporary, sha256: digest, size: size, sampleRate: rate, channels: channels, ranges: ranges)
+                return Extracted(url: temporary, sha256: digest, size: size, sampleRate: rate, channels: channels, ranges: ranges,
+                                 originalFrames: length)
             }
         } catch {
             try? FileManager.default.removeItem(at: temporary)
@@ -71,7 +74,7 @@ public enum VoiceClipAudio {
     }
 
     private static func write(_ original: URL, spans: [VoiceClipSpan], to destination: URL,
-                              isCancelled: () -> Bool) throws -> (Double, Int, [VoiceClipRange]) {
+                              isCancelled: () -> Bool) throws -> (Double, Int, [VoiceClipRange], Int64) {
         let source: AVAudioFile
         do { source = try AVAudioFile(forReading: original, commonFormat: .pcmFormatFloat32, interleaved: false) } catch { throw Failure.unreadable }
         let rate = source.processingFormat.sampleRate, channels = source.processingFormat.channelCount
@@ -84,7 +87,7 @@ public enum VoiceClipAudio {
             let clip = try AVAudioFile(forWriting: destination, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
             try read(source, ranges: ranges, into: buffer, isCancelled: isCancelled) { try clip.write(from: $0) }
         }
-        return (rate, Int(channels), ranges)
+        return (rate, Int(channels), ranges, source.length)
     }
 
     /// Reads each range of `file` in chunks into `buffer`, handing every chunk to `body`. A read may deliver fewer frames

@@ -1576,6 +1576,7 @@ public actor LibrarySyncEngine {
         }
         try appendPhotoAssets(&meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
         try appendPageAssets(meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
+        try appendVoiceClipAssets(meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
         let originals = directory.appendingPathComponent("Originals", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: originals, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
             // In name order, so publishing the same conversation again writes the same bytes.
@@ -1653,9 +1654,11 @@ public actor LibrarySyncEngine {
         }
         try validatePhotoAssets(snapshot, assets: assets)
         try validatePageAssets(snapshot)
+        try validateVoiceClipAssets(snapshot)
     }
     private func mergedAssets(for meeting: Meeting, eventIDs: [String], events: [String: SyncEventHeader]) -> [SyncAsset] {
         var assets = meeting.tracks.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) } + photoAssets(of: meeting) + pageAssets(of: meeting)
+            + voiceClipAssets(of: meeting)
         for id in eventIDs.sorted() {
             for asset in events[id]?.assets ?? [] where asset.relativePath.contains(".highlights-") && !assets.contains(asset) { assets.append(asset) }
         }

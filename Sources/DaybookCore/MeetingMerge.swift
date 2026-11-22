@@ -161,6 +161,11 @@ public enum MeetingMerge {
                 conflicted.insert("a page")
             }
         }
+        // Voice clips: one a speaker of a recording, never a conflict, and never lost to a merge (VoiceClips.swift).
+        if local.voiceClips != nil || remote.voiceClips != nil || base?.voiceClips != nil {
+            let clips = VoiceClip.mergedList(base: base?.voiceClips ?? [], local: local.voiceClips ?? [], remote: remote.voiceClips ?? [])
+            result.voiceClips = clips.isEmpty ? nil : clips
+        }
         // When the notebook's pages were turned: a log, both copies' entries (bounded, the oldest go).
         if local.pageTurns != nil || remote.pageTurns != nil {
             result.pageTurns = PageTurn.merged(local.pageTurns, remote.pageTurns)

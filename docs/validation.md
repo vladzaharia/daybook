@@ -2,8 +2,12 @@
 
 ## Voice clips: compressing recordings a voice profile learned from (2026-11-21)
 
-A voice profile keeps the speech it learned from as lossless clips on each Mac, so the recordings it learned from can be
-compressed (docs/architecture.md, "Voice clips"). On `storage/voice-clips`.
+The speech every voiceprint was learned from is kept as a lossless clip in its conversation, synced with it, so the
+recordings it was learned from can be compressed (docs/architecture.md, "Voice clips"; docs/icloud-sync.md, "Voice
+clips"). On `storage/voice-clips`, after review: every source a voiceprint names gets its clip (no cap; a profile holds
+at most 8 voiceprints the person chose and 16 learned per embedding space), clips sync with their conversation, a clip
+is cut again when its speaker's passages change and kept stale when there's no original to cut it from, sources that
+can't be cut wait instead of taking every pass, and a clip goes with its conversation's files.
 
 **What a profile needs of the original audio** (read from the code): voiceprints are embeddings in the library's
 settings; labelling, matching within a conversation, and teaching a profile from a name read embeddings only. Audio is
@@ -13,41 +17,62 @@ cut per voiceprint source before its original may be replaced or let go, and a c
 waiting for its voice isn't compressed.
 
 **Verified.** Synthetic audio and temporary libraries only, no models, no recording:
-- planning (`VoiceClipsTests`): the speaker's passages nobody talks over, longest first up to 30 s, the last cut short;
-  a matched speaker read under the label it was matched to (and not when the match was rejected); a profile's 8 sources,
-  the person's own first then the newest learned, and a source beyond them holding nothing back; two embedding spaces of
-  one speaker sharing one clip, and a merged profile's voiceprints counting toward the profile it was merged into; a
-  deleted profile holding nothing back, a voiceprint whose recording can't be told holding it back, a profile with no
-  record counting; a record this version can't read keeping every voiceprint holding back.
-- cutting (`VoiceClipsTests`): 48 kHz Float32 mono CAF, a stereo call with two different channels, and a 16-bit 16 kHz
-  WAV cut into clips whose every sample has the original's bit pattern, with the frame ranges expected; a passage past
-  the end cut short, one wholly past it left out, nothing to cut and an unreadable file refused, leaving nothing behind;
-  a clip compared with a recording one bit different, with other frames, or with other channels refused. AVAudioFile
-  delivers fewer frames than asked (32,320 of 32,768 from a CAF, measured), so a read counts what it delivered.
-- the library (`VoiceClipLibraryTests`): a recording a named voiceprint learned from refused until its clip is here, then
-  compressed and its original let go, the clip outliving it and checksummed; an original that isn't the track's bytes,
-  or written again during the cut, or a speaker with nothing to cut, gives no clip and keeps the original; a crash after
-  the cut or after the clip is placed leaving nothing the index names, the placed file swept at launch; a damaged clip
-  holding the original until cut again, and the same bytes under a new stamp trusted again once hashed; the clip gone
-  after the files were hashed keeping the original under the lock; a voiceprint taught under the lock, and again after
-  the copy is at its own path, keeping the original; a learned voiceprint beyond the profile's 8 sources not holding its
-  recording back while a named one does; a name given before its voice keeping the conversation out until it has one;
-  two Macs, B letting its original go only after cutting its own clip (the same bytes as A's), the clip never synced; a
-  deleted profile's clip kept a day, kept by an Undo, then deleted; a clip kept while another voiceprint names its
-  speaker and deleted after the last; nothing deleted while a voiceprint can't be read, at launch, or while the index
-  can't be read; a voiceprint's speech read from the original while it's here (also once a copy replaced it) and from
-  the clip after, the same samples, and nothing once only the copy is left.
+- planning (`VoiceClipsTests`, 16): the speaker's passages nobody talks over, longest first up to 30 s, the last cut
+  short; a passage whose speaker isn't known, and the far end of a call the computer audio captured with a microphone,
+  never the speaker's (and nothing taken out where the microphone's offset isn't stored); a matched speaker read under
+  the label it was matched to; every one of a profile's 24 sources wanted and holding back, the oldest too; two
+  embedding spaces of one speaker one source, a merged profile's voiceprints counting; a deleted profile holding nothing
+  back, an unknown recording holding it back, a record this version can't read keeping every voiceprint holding back; a
+  clip's source matched to voiceprints directly; a clip current only while cut from the recording's original (or the one
+  its copy replaced) with the speaker's passages now and not stale; clips merging without a conflict in either order, a
+  clip never lost to a merge; extra keys kept, unsafe paths refused, a copy kept under a new ID naming none. Cutting as
+  before: three formats bit for bit, passages past the end, nothing to cut, a one-bit difference refused.
+- sync (`LibrarySyncVoiceClipTests`, 5): in an encrypted library the clip is a sealed object (no plaintext in the sync
+  folder), the iPhone applies at once without fetching it and publishes an edit by reference, and a new Mac installs it
+  before the conversation applies; an eager Mac waits for a clip's object; an event listing no clip assets (a Daybook
+  from before clips) still brings the clip; a path that isn't the source's refused; a device in use without
+  `voiceclip-1` holds clips back until it's been away 30 days.
+- the library (`VoiceClipLibraryTests`, 21): a recording refused until its clip covers it, then compressed and its
+  original let go, the clip named durably without changing the edit date; a profile met in ten conversations, the oldest
+  far past the age, each kept until its own clip; an original that isn't its bytes, or written again during the cut, or
+  the speaker's passages changed during it, gives no clip; nothing to cut decided without reading; a crash at either step
+  leaving nothing named, the placed file kept (however old) and named by the next cut; a damaged clip holding the
+  original until cut again, and the same bytes under a new stamp trusted again once hashed; the clip gone after the files
+  were hashed keeping the original under the lock; a voiceprint taught under the lock keeping the original; a passage
+  given to someone else: covered no more, cut again, the earlier file swept a day later, then, with the original gone,
+  kept and marked stale, read for nothing, and still stale when the passage is put back; three recordings that can't
+  give a clip not starving the fourth (two failures waiting 6 hours, one refusal not tried again); a conversation in the
+  Trash keeping its clip whatever its voiceprints and with its saved copy unreadable, then, restored, letting it go a
+  day after; Mac B covered by the clip A cut, cutting none and letting its original go; a new Mac restoring after the
+  original went, getting the clip and never the original, reading the voice from the clip; a clip not yet in iCloud (cut
+  again after a passage changed) keeping the original here and in the query the iCloud cleanup uses, until a pass
+  uploads it, the earlier file kept while sync's applied copy names it; an older device in use keeping every recording;
+  the day of grace, kept by an Undo, not shortened by a clock jump (the continuous clock in the same boot), counted by
+  the wall clock otherwise; nothing deleted while a record or this Mac's record can't be read, at launch, or in a synced
+  library before its settings are here; the speech read from the original while it's here with its bytes (not once
+  they changed), then from the clip, the same samples.
 - unchanged: `RecordingCompressionLibraryTests` (41), `RecordingCompressionPlannerTests` (9), `RecordingCompressionTests`
-  (15), `SpeakerProfileLibraryTests` (20).
-- 13 mutations of the safety checks, each failing a test: the voice check under the lock before a recording is
-  replaced, and the last one before its track names the copy; the check under the lock before an original is let go;
-  the bit-for-bit comparison; the original's hash before the cut and its stamp after; a clip counted only with its
-  stamp; the day of grace; nothing deleted while a record can't be read, at launch, or with an index that can't be read
-  (taken as empty); every voiceprint holding back while a record can't be read; and a name waiting for its voice.
+  (15), `SpeakerProfileLibraryTests` (20), `MeetingMergeTests`, `MeetingStoreTests`, `LibrarySyncTests`,
+  `LibrarySyncPageTests`, `LibrarySyncPhotoTests`, `LibrarySyncSealingTests`, `LibrarySyncForksTests`,
+  `LibrarySyncCompatibilityTests`, `LibrarySyncConvergenceTests`, `RecordingCompressionSyncTests`,
+  `SyncPresenceRecordTests`, `LibraryTrashAndFilingTests`, `MergeConversationsTests`, `LibrarySyncApplyTests`.
+- 35 mutations of the safety checks, each failing a test: every voiceprint holding back (a cap of 8 put back); a
+  clip current only with the passages now, from the recording's original, and not stale; the passages checked again
+  under the lock; a stale mark with no original; failures waiting and refusals not tried again; clips hydrated and
+  counted live, published by reference, their paths validated; an original let go only with its clip in iCloud, and in
+  iCloud meaning uploaded; every device in use keeping clips; a copy under a new ID naming none; a clip never lost to a
+  merge; settings current under the lock; the grace by the continuous clock and by the wall clock; liveness by the
+  clip's own source; the original's hash before its speech is read; an unknown speaker's passage and the far end of a
+  call never the speaker's; nothing deleted while a record or this Mac's record can't be read, or at launch; a clip held
+  only with its stamp; the original's hash before the cut and its stamp after; the bit-for-bit comparison; the voice
+  checks under the lock before a recording is replaced, before its track names the copy, and before an original goes;
+  an unnamed file a voiceprint needs, or sync's applied copy names, kept.
 
-**Needs a real Mac and library.** The clips of real speech: their sizes on a real library (`du -sh VoiceClips`), that the
-longest clean passages are the speaker's (diarization's own boundaries), and a voiceprint remade from a clip by the voice
-model when a model with a new space ships (nothing remakes one yet). A Time Machine restore re-trusting clips by hash.
+**Needs a real Mac and library.** The clips of real speech: their sizes on a real library (each conversation's
+`Originals/VoiceClips/`), that the longest clean passages are the speaker's (diarization's own boundaries), the far end
+subtracted on a real call with speakers, two Macs over real iCloud (a clip uploading and confirming, then the original
+going), and a voiceprint remade from a clip by the voice model when a model with a new space ships (nothing remakes one
+yet). A Time Machine restore re-trusting clips by hash.
 
 ## Compress older recordings (2026-11-20)
 

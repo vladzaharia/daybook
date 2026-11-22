@@ -689,6 +689,9 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     /// The person's answers to flags (`TranscriptFlagDismissal`), never removed: taking one back marks it withdrawn.
     /// Nil until the first; merged as a union, answer by answer.
     public var transcriptFlagDismissals: [TranscriptFlagDismissal]?
+    /// The lossless clips of the speech voice profiles learned from in this conversation's recordings (`VoiceClips`), one
+    /// a speaker of a recording, each a file in the conversation's folder. Nil until the first.
+    public var voiceClips: [VoiceClip]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
@@ -817,7 +820,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
             audioAlignments, fusionSummary, processingRequests, photos, ink, pages, pageTurns, backgroundPassages, includesBackgroundAudio,
-            speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagsVersion, transcriptFlagDismissals
+            speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagsVersion, transcriptFlagDismissals, voiceClips
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -866,6 +869,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         transcriptFlags = (try? values.decodeIfPresent([TranscriptFlag].self, forKey: .transcriptFlags)) ?? nil
         transcriptFlagsVersion = (try? values.decodeIfPresent(Int.self, forKey: .transcriptFlagsVersion)) ?? nil
         transcriptFlagDismissals = (try? values.decodeIfPresent([TranscriptFlagDismissal].self, forKey: .transcriptFlagDismissals)) ?? nil
+        voiceClips = try values.decodeIfPresent([VoiceClip].self, forKey: .voiceClips)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -911,6 +915,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(transcriptFlags, forKey: .transcriptFlags)
         try values.encodeIfPresent(transcriptFlagsVersion, forKey: .transcriptFlagsVersion)
         try values.encodeIfPresent(transcriptFlagDismissals, forKey: .transcriptFlagDismissals)
+        try values.encodeIfPresent(voiceClips, forKey: .voiceClips)
         try unknownFields.encode(to: encoder)
     }
 }

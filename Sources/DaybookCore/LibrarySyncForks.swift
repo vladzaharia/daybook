@@ -37,6 +37,9 @@ extension Meeting {
             return copy
         }
         kept.processingRequests = open.isEmpty ? nil : open
+        // A voice clip is named by its conversation (its path is the source's, `VoiceClip.isStored`), and voiceprints name
+        // the conversation they were learned from, not this copy: the copy names none (the files that came are swept).
+        kept.voiceClips = nil
         kept.revisions.append(MeetingRevision(id: SyncEncoding.uuid("\(id.uuidString):\(field)"), date: updatedAt,
                                               field: "\(field):\(self.id.uuidString)", oldValue: self.id.uuidString, newValue: title))
         return kept
