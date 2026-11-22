@@ -95,8 +95,8 @@ extension AppState {
                      inUse: Set(library.meetings.map(\.id).filter(isInUse)), trashed: Set(library.trashedMeetingIDs()),
                      done: Set(library.meetings.filter { processingStatus(for: $0) == .done }.map(\.id)),
                      upgradeOffered: Set(library.meetings.filter { upgradeOffer(for: $0) != nil }.map(\.id)),
-                     // A voiceprint holds its recording back until this Mac holds its clip.
-                     voiceprints: library.holdingBackVoiceprints(lineage: lineage),
+                     // A voiceprint holds its recording back until a clip here covers it.
+                     voiceprints: await library.holdingBackVoiceprints(),
                      lineage: lineage, refused: library.compressionHeldBack(now: now), clockSteady: clockSteady, canListen: canListen)
     }
 
@@ -130,11 +130,11 @@ extension AppState {
         guard steady, let before = await compressionInputs(now: now, library: id, clockSteady: steady, canListen: listener != nil),
               before.settingsApplied else { return }
         // Voice clips no profile needs any more go whatever the choice, once the library's settings are here.
-        await library.reconcileVoiceClips(now: now)
+        await library.reconcileVoiceClips(now: now, clock: VoiceClipClock(boot: ContinuousClockMark.boot, seconds: ContinuousClockMark.seconds()))
         // Letting go of originals waits with the rest: Never, or before this Mac's start, keeps every original here.
         guard before.age != .never, let start = before.startsAt, now >= start else { return }
         // The speech voice profiles learned from, cut from originals that may be replaced or let go soon.
-        await library.makeVoiceClips(olderThan: before.age.interval.map { now.addingTimeInterval(-$0) }) { [weak self] in
+        await library.makeVoiceClips(olderThan: before.age.interval.map { now.addingTimeInterval(-$0) }, now: now) { [weak self] in
             self?.mayCompressRecordings == true
         }
         guard mayCompressRecordings, let first = await compressionInputs(now: now, library: id, clockSteady: steady, canListen: listener != nil),

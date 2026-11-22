@@ -100,11 +100,15 @@ extension LibraryController {
                 guard let copy = ingested.track else { throw DaybookError.libraryUnavailable }
                 mapping[file.track.id] = copy.id
             }
+            // The voice clips of what moves go with it, at the same paths (LibraryController+VoiceClips).
+            try copyVoiceClipFiles(source.voiceClipsCarried(mapping), from: id, to: newID)
         } catch {
             _ = try? await moveToTrash(newID)
             throw error
         }
         let carried = Self.carried(from: source, group: Set(group.map(\.id)), mapping: mapping)
+        // Voiceprints still name the conversation the recording left: its clips are carried from there, on the copy.
+        let clips = (meeting(id) ?? source).voiceClipsCarried(mapping)
         update(newID) { meeting in
             for original in group {
                 guard let copyID = mapping[original.id], let index = meeting.tracks.firstIndex(where: { $0.id == copyID }) else { continue }
@@ -132,11 +136,18 @@ extension LibraryController {
                                                                      oldValue: "", newValue: "Moved from “\(source.title)”")]
             meeting.kind = source.kind
             meeting.status = carried.transcripts.isEmpty ? .imported : .ready
+            if !clips.isEmpty { meeting.voiceClips = clips.sorted { $0.id < $1.id } }
         }
         let words = RecordingWords.inSentence(track, in: source, phoneName: phoneName)
         update(id) { meeting in
             for index in meeting.tracks.indices where mapping[meeting.tracks[index].id] != nil {
                 meeting.tracks[index].removal = RecordingRemoval(removedAt: now, movedTo: newID)
+            }
+            // Its clips went with it (its file here goes a day later, once the new conversation's is held whole).
+            let moved = Set(clips.map(\.id))
+            if meeting.voiceClipsAreReadable, let named = meeting.voiceClips {
+                let kept = named.filter { clip in clip.unread != nil || !moved.contains(clip.carried(from: meeting.id, to: clip.trackID).id) }
+                meeting.voiceClips = kept.isEmpty ? nil : kept
             }
             meeting.revisions.append(MeetingRevision(date: now, field: "source:\(trackID.uuidString):moved", oldValue: "",
                                                      newValue: "Moved \(words) to “\(title)”"))

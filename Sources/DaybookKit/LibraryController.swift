@@ -988,6 +988,12 @@ public final class LibraryController {
         var applied: SyncApplied?
         do {
             try Task.checkCancellation()
+            // In an encrypted library, the superseded originals voice profiles still need stay through the sealer's key
+            // rotations, by the rule that lets an original go (LibraryController+VoiceClips).
+            if let engine = sync.engine, await engine.sealsObjects {
+                let compressed = meetings.contains { $0.tracks.contains(where: \.isCompressed) }
+                await engine.holdOriginalsInICloud(for: compressed ? await meetingsHoldingOriginalsInICloud() : nil, judged: Set(meetings.map(\.id)))
+            }
             let snapshot = meetings
             let deleted = Set(trashedMeetingIDs())
             guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: try encodedMetadata(),

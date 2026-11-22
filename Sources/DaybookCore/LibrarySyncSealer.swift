@@ -65,10 +65,14 @@ struct SealerInput {
     var compactionEntries: [JournalEntry] = []
     /// Deleted conversations.
     var deleted: Set<UUID>
-    /// The objects each live conversation's merged heads use (and highlight sidecars).
+    /// The objects each live conversation's merged heads use (and highlight sidecars), with the superseded originals
+    /// voice profiles still need kept in iCloud (`withOriginalsHeldForVoice`).
     var liveAssets: [UUID: [SyncAsset]]
     /// Every live conversation applied this pass, nothing pending or deferred.
     var complete: Bool
+    /// Live objects (by SHA-256) a conversation applies without: one that's nowhere to seal from never keeps the sealer
+    /// from finishing (a superseded original kept for a voice profile, already gone).
+    var optional: Set<String> = []
 }
 
 extension LibrarySyncEngine {
@@ -326,6 +330,9 @@ extension LibrarySyncEngine {
                     let path = "Sealed/Blobs/\(name)"
                     let url = remoteRoot.appendingPathComponent(path)
                     if SyncFiles.itemState(url) != .absent || inboxCopy(path) != nil { continue }
+                    // A voice clip whose object is nowhere (a Daybook from before clips deleted it) is nothing to seal: it
+                    // never keeps the sealer from finishing. A Mac that holds it uploads it again (`hydrateVoiceClip`).
+                    if Self.isVoiceClip(asset) || input.optional.contains(asset.sha256), !voiceClipIsAnywhere(asset, meetingID: meetingID) { continue }
                     guard !budget.timeExceeded else { progress.remaining += 1; continue }
                     let waiting = backlog ?? sealedBacklog()
                     backlog = waiting
