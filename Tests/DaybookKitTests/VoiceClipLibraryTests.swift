@@ -401,6 +401,31 @@ final class VoiceClipLibraryTests: XCTestCase {
         XCTAssertFalse(RecordingCompressionPlanner.facts(try XCTUnwrap(library.meeting(id)), inputs, learned: []).teachesVoiceProfile)
     }
 
+    /// A speaker named after its recording was compressed, in a run with no voice: the Mac's own original stays for the clip
+    /// its voice will need, until the voice is given and the clip is cut.
+    func testBehaviorANameGivenAfterTheCopyWasMadeKeepsThisMacsOriginalUntilItsClipIsHere() async throws {
+        let library = try await self.library("Mac")
+        let (id, track) = try await conversation(in: library)
+        library.update(id) { meeting in
+            for index in meeting.speakers.indices { meeting.speakers[index].embedding = nil; meeting.speakers[index].embeddingModelID = nil }
+        }
+        let compressed = await compress(library, id, track)
+        XCTAssertEqual(compressed, [track.id])
+        library.renameSpeaker(speaker, to: "Sam", in: id)
+        XCTAssertTrue(try XCTUnwrap(library.meeting(id)).awaitsVoiceForNamedSpeaker)
+        let kept = await library.finishCompressions()
+        XCTAssertEqual(kept, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path(library, track.relativePath, in: id)), "its voice isn't made yet")
+        library.update(id) { $0.giveVoices([self.speaker: [1, 0]], space: "space", model: "test") }
+        teach(library, from: id, track: track)
+        let stillKept = await library.finishCompressions()
+        XCTAssertEqual(stillKept, 0, "no clip covers it yet")
+        await library.makeVoiceClips(olderThan: .distantFuture)
+        let removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path(library, track.relativePath, in: id)))
+    }
+
     // MARK: When the transcript changes
 
     func testBehaviorAClipIsCutAgainWhenItsSpeakersPassagesChangeAndKeptStaleOnceTheOriginalIsGone() async throws {

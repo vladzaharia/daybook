@@ -720,7 +720,7 @@ extension LibrarySyncEngine {
         var byOriginal: [String: [SupersededOriginal]] = [:]
         for meeting in meetings where !deleted.contains(meeting.id) {
             // What this version can't read on the conversation or a recording might say to keep it, as for compressing.
-            if !meeting.unknownFields.isEmpty || meeting.tracks.contains(where: { !$0.unknownFields.isEmpty || !$0.$source.isKnown }) {
+            if meeting.hasFieldsFromNewerVersion {
                 held.formUnion(meeting.tracks.compactMap { $0.encoding?.previousSHA256 })
             }
             let directory = localRoot.appendingPathComponent("Meetings/\(meeting.id.uuidString)", isDirectory: true)

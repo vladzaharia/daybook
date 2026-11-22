@@ -20,7 +20,7 @@ extension LibrarySyncEngine {
 
     /// Conversations whose superseded originals (`TrackEncoding.previousSHA256`) must stay in iCloud for voice profiles
     /// (`LibraryController.meetingsHoldingOriginalsInICloud`: a voiceprint learned from them whose clip isn't confirmed in
-    /// iCloud). The sealer counts each one's as live, so rotating keys seals it again rather than retiring it, by the same
+    /// iCloud, a named speaker awaiting a voice, fields from a newer version). The sealer counts each one's as live, so rotating keys seals it again rather than retiring it, by the same
     /// rule anything else that lets a superseded original go from iCloud follows. Nil (not said yet, or a device that
     /// can't say): every one counts, as does any conversation the library didn't judge (`judged`: one that arrives in the
     /// pass). `judgment`: whether the compacting Mac may judge superseded originals at all (`SupersededJudgment`).

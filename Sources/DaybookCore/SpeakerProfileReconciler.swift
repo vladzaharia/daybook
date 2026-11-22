@@ -710,6 +710,11 @@ extension Meeting {
         }
     }
 
+    /// What this version can't read on the conversation or a recording, which might say to keep its originals.
+    public var hasFieldsFromNewerVersion: Bool {
+        !unknownFields.isEmpty || tracks.contains(where: { !$0.unknownFields.isEmpty || !$0.$source.isKnown })
+    }
+
     /// A speaker the person named before its voice was known (`runsWithoutVoices`): its profile learns from it once
     /// it's given a voice from the recording, so the recording's original is needed until then.
     public var awaitsVoiceForNamedSpeaker: Bool {
