@@ -198,6 +198,47 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(rig.inference.transcribed.count, 1, "Only this Mac's own recording was transcribed")
     }
 
+    /// A recording added to a conversation while a Mac carries out its Transcribe (Keep Recording on Apple Watch, a
+    /// recorder's import): the iPhone's ask is that same request, claimed already, and the job is past taking on
+    /// recordings (it summarizes). The request completes with the job, and the recording, which came in a sync pass while
+    /// it ran, gets a job of its own: transcribed, and summarized again with the rest.
+    func testARecordingAddedWhileTheRequestRunsIsTranscribedToo() async throws {
+        let mac = try await rig()
+        let cloud = try temporaryFolder("Cloud")
+        try mac.connectSync(cloud)
+        let phone = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { phone.tearDown() }
+        let first = try mac.audio("first-part.wav", frequency: 470)
+        let later = try mac.audio("later-part.wav", frequency: 940)
+        try mac.inference.script(first, [(0, "The first part.")])
+        try mac.inference.script(later, [(0, "Recorded on after the stop.")])
+        let start = Date().addingTimeInterval(-900)
+        let id = try await phone.file(first, recordingID: UUID(), start: start, duration: 0.5)
+        let asked = try XCTUnwrap(phone.library.meeting(id)?.openProcessingRequests.first)
+        await phone.synchronize()
+
+        mac.inference.blockSummaries(true)
+        await mac.state.synchronizeLibrary()
+        try await waitUntil("the summary to start") { mac.inference.summarizing }
+        XCTAssertTrue(try XCTUnwrap(request(mac, id)).isClaimed(by: mac.state.library.thisDevice, at: Date()))
+
+        // The later part is filed into the same conversation: the iPhone asks again, and is handed the request that runs.
+        try await phone.file(later, recordingID: UUID(), into: id, start: start.addingTimeInterval(600), duration: 0.5)
+        XCTAssertEqual(phone.library.meeting(id)?.openProcessingRequests.map(\.id), [asked.id])
+        await phone.synchronize()
+        await mac.state.synchronizeLibrary()
+
+        mac.inference.blockSummaries(false)
+        try await mac.processed(id)
+        let meeting = try XCTUnwrap(mac.meeting(id))
+        XCTAssertEqual(meeting.tracks.count, 2)
+        XCTAssertFalse(meeting.hasUntranscribedTranscribableAudio, "The later part is transcribed too")
+        XCTAssertEqual(mac.inference.transcribed.count, 2)
+        XCTAssertEqual(mac.inference.summarized.count, 2, "Summarized again with it")
+        XCTAssertEqual(request(mac, id)?.outcome?.result, .completed)
+        XCTAssertEqual(ProcessingStatus(meeting), .done)
+    }
+
     func testPauseAndCancelGiveTheClaimBack() async throws {
         let rig = try await rig()
         let audio = try rig.audio("long.wav", frequency: 500)
@@ -298,6 +339,31 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(after.first { $0.id == rig.state.sync.deviceID }?.canProcess, true)
         XCTAssertEqual(after.latestProcessor?.id, rig.state.sync.deviceID)
         XCTAssertEqual(phone.library.processingStatus(for: id), .done, "Done on the phone too")
+    }
+
+    /// A number of people the speaker model here can't take: the request is left for a Mac whose model can, never run
+    /// without the number and called done; and a job of this Mac's own, asked nothing, doesn't take it on.
+    func testBehaviorANumberOfPeopleIsLeftForAMacWhoseSpeakerModelTakesIt() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let audio = try rig.audio("counted.wav", frequency: 410)
+        let id = try await rig.waitingConversation("Counted", audio: audio, script: [(0, "Three of us on the call.")])
+        state.processingPreferences.speakerModelID = "sortformer-2.1/compact"
+        let asked = try XCTUnwrap(state.library.requestProcessing(id, mode: .speakerRefresh, speakers: .init(count: 3), by: .phone))
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let job = state.job(for: asked, in: meeting)
+        state.installedModels.formUnion(job.transcribingModelIDs(hasUntranscribedAudio: true))
+        XCTAssertTrue(state.hasModels(for: job, in: meeting), "every model it needs is here")
+        XCTAssertFalse(state.takesSpeakerAsk(job))
+
+        state.pickUpRequests()
+        try await rig.processed()
+        XCTAssertTrue(try XCTUnwrap(request(rig, id)).isOpen)
+        XCTAssertNil(request(rig, id)?.claim, "left for a Mac whose speaker model takes a number")
+        XCTAssertTrue(rig.inference.transcribed.isEmpty)
+        let plain = state.makeJob(meetingID: id, mode: .speakerRefresh)
+        XCTAssertFalse(AppState.covers(plain, asked), "a plain Identify Speakers Again doesn't do what it asks")
+        XCTAssertTrue(AppState.covers(state.makeJob(meetingID: id, mode: .speakerRefresh, speakers: .init(count: 3)), asked))
     }
 
     func testTwoMacsRacingForOneRequestOnlyOneRunsIt() async throws {

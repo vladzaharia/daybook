@@ -117,14 +117,17 @@ struct LibraryDevicesScreen: View {
 /// while the library's files are being switched over, `LibraryProtector`).
 struct StorageScreen: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
     @State private var clearing = false
+    /// The Trash's conversations an Empty Trash is asking about, while it asks.
+    @State private var emptying: [UUID] = []
 
     var body: some View {
         @Bindable var settings = model.settings
         let usage = model.audio.usage
         let syncs = model.sync.isConnected
         Form {
-            LibraryStorageSection(report: model.audio.report?.with(models: model.models.bytesOnDisk))
+            LibraryStorageSection(report: model.audio.report?.with(models: model.models.bytesOnDisk), emptyTrash: askToEmptyTrash)
             // Downloads go back to iCloud and come down again when played: a budget applies only while sync runs.
             if syncs {
                 Section {
@@ -179,10 +182,34 @@ struct StorageScreen: View {
         .navigationTitle("Storage")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.audio.refreshUsage() }
+        .alert(LibraryWords.emptyTrashTitle(count: emptying.count), isPresented: Binding(get: { !emptying.isEmpty }, set: { if !$0 { emptying = [] } })) {
+            Button("Delete", role: .destructive) {
+                let ids = emptying
+                Task {
+                    do {
+                        let result = try await model.library.controller.deleteFromTrash(ids)
+                        model.say(LibraryWords.deletedNow(deleted: result.deleted.count, failed: result.failed.count).joined(separator: " "))
+                    } catch { model.say("Couldn’t delete.", details: error.localizedDescription) }
+                    await model.audio.refreshUsage()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(LibraryWords.deleteNowMessage)
+        }
         .onChange(of: settings.audioCacheBudget) { _, budget in Task { await model.audio.setBudget(budget) } }
         .onChange(of: settings.includesLibraryInBackups) { model.applyBackupExclusion() }
         .onChange(of: settings.includesEncryptedLibraryInBackups) { model.applyBackupExclusion() }
         .onChange(of: settings.protectsWhileLocked) { model.protectionChanged() }
+    }
+
+    /// Empty Trash: what the Trash lists, as it lists it, once the Personal lock hides none of it.
+    private func askToEmptyTrash() {
+        Task {
+            let trashed = await model.library.controller.trashedMeetings()
+            guard !trashed.isEmpty, await personalLock?.unlock(toActOn: trashed) != false else { return }
+            emptying = trashed.map(\.id)
+        }
     }
 
     /// A size, as Settings says it everywhere ("632 MB").

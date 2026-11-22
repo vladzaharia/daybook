@@ -18,7 +18,7 @@ public final class LibraryController {
     /// here (`update`, `add`, …), which save, sync, and keep Version History.
     public private(set) var meetings: [Meeting] = [] { didSet { revision &+= 1 } }
     /// Bumped whenever `meetings` changes: the key for what's derived from them (a list's order, search).
-    public private(set) var revision = 0
+    public internal(set) var revision = 0
     /// Folders, templates, and vocabulary: synced library settings.
     public private(set) var metadata = LibraryMetadata()
     /// Vocabulary, mirrored into `metadata.vocabulary` when it changes (`saveGlossaryTerm`, `removeGlossaryTerm`).
@@ -125,6 +125,8 @@ public final class LibraryController {
         store.excludeSettingsFromBackup(excludesSettingsFromBackup)
         glossaryStore.excludeFromBackup(excludesSettingsFromBackup)
         self.store = store; self.glossaryStore = glossaryStore
+        // A Delete Now a quit or crash stopped partway finishes before anything reads the Trash.
+        await store.finishTrashDeletions()
         meetings = try await store.list()
         var warnings = await store.warnings
         do { glossary = try await glossaryStore.list() }
@@ -211,9 +213,10 @@ public final class LibraryController {
         return meeting.id
     }
 
-    /// Adds a conversation made elsewhere (a recovered recording) and saves it.
+    /// Adds a conversation made elsewhere (a recovered recording) and saves it. Never one deleted for good: its ID is
+    /// a tombstone (`TrashTombstone`).
     public func add(_ meeting: Meeting) {
-        guard self.meeting(meeting.id) == nil else { return }
+        guard self.meeting(meeting.id) == nil, !Self.isDeletedForGood(meeting.id, in: rootURL) else { return }
         meetings.append(meeting)
         persist(meeting)
     }
@@ -803,12 +806,13 @@ public final class LibraryController {
         return true
     }
 
-    /// Conversations in the Trash folder.
-    public func trashedMeetingIDs() -> [UUID] {
-        let trash = rootURL.appendingPathComponent("Trash")
-        return ((try? FileManager.default.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)) ?? [])
-            .compactMap { UUID(uuidString: $0.lastPathComponent) }
-    }
+    /// Conversations in the Trash folder, without those deleted from it for good. What the Trash lists is
+    /// `trashedMeetings()`, which leaves out the ones it can't read.
+    public func trashedMeetingIDs() -> [UUID] { Self.trashedIDs(in: rootURL) }
+
+    /// Conversations deleted here: in the Trash, or deleted from it for good (their tombstones). What sync publishes
+    /// as deletions.
+    public func deletedMeetingIDs() -> [UUID] { Self.folderIDs(in: rootURL) }
 
     /// Puts a conversation back from the Trash. Once sync has published its deletion, that ID stays deleted
     /// everywhere (the next pass would move it back), so it comes back as a new conversation with the same
@@ -818,6 +822,7 @@ public final class LibraryController {
         await acquireLock()
         defer { releaseLock() }
         guard let store else { throw DaybookError.libraryUnavailable }
+        guard !Self.isDeletedForGood(id, in: rootURL) else { throw LibraryError.missingMeeting(id) }
         if let sync, sync.isSyncedDeletion(id) {
             let restored = try await restoreAsNewConversation(id, store: store)
             meetings.append(restored)
@@ -830,7 +835,7 @@ public final class LibraryController {
     }
 
     /// The trashed conversation's files, cloned into a new conversation's folder, and its last saved copy as
-    /// that conversation. The Trash copy is removed once the new one is saved.
+    /// that conversation. The Trash copy goes once the new one is saved, leaving the old ID's tombstone.
     private func restoreAsNewConversation(_ id: UUID, store: MeetingStore) async throws -> Meeting {
         let trashed = rootURL.appendingPathComponent("Trash/\(id.uuidString)", isDirectory: true)
         let newID = UUID()
@@ -845,7 +850,7 @@ public final class LibraryController {
         }.value
         do { try await store.save(restored) }
         catch { try? FileManager.default.removeItem(at: folder); throw error }
-        try? FileManager.default.removeItem(at: trashed)
+        _ = try? await store.deleteFromTrash(id)
         return restored
     }
 
@@ -1005,7 +1010,7 @@ public final class LibraryController {
                 }
             }
             let snapshot = meetings
-            let deleted = Set(trashedMeetingIDs())
+            let deleted = Set(deletedMeetingIDs())
             guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: try encodedMetadata(),
                                                           limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
             // Save edits made while iCloud hydrated files before applying the pass.

@@ -35,6 +35,8 @@ struct LibraryPage: View {
   @State private var naming: FolderNaming?
   @State private var folderName = ""
   @State private var deletingFolder: LibraryFolder?
+  /// Something is in the Trash, read while it's the place shown: Empty Trash is in More only then.
+  @State private var hasTrash = false
   @State private var captionHits: [LibraryCaptionSearch.Hit] = []
 
   private enum FolderNaming: Identifiable {
@@ -65,6 +67,10 @@ struct LibraryPage: View {
     .environment(\.editMode, .constant(session.isSelecting ? .active : .inactive))
     .settingsSheet(isPresented: $showingSettings)
     .task { await openRequestedAtLaunch() }
+    .task(id: [session.place, library.revision] as [AnyHashable]) {
+      let inTrash = place.isTrash
+      hasTrash = inTrash ? await library.hasTrashedMeetings() : false
+    }
     // A conversation opened from Settings (a recorder's Recent imports) shows once Settings steps aside.
     .onChange(of: session.openID) { _, id in
       if id != nil, showingSettings { showingSettings = false }
@@ -388,7 +394,7 @@ struct LibraryPage: View {
       // Glyphs in the title's ink, as the system's back chevron; teal is for what confirms.
       ToolbarItem(placement: .topBarTrailing) {
         Menu {
-          ForEach(LibraryChrome.more(in: place, isEmpty: meetings.isEmpty), id: \.self) { item in
+          ForEach(LibraryChrome.more(in: place, isEmpty: meetings.isEmpty, trashIsEmpty: !hasTrash), id: \.self) { item in
             Button {
               perform(item)
             } label: {
@@ -477,6 +483,14 @@ struct LibraryPage: View {
         session.isSelecting = true
         session.selection = []
       }
+    case .emptyTrash:
+      // What the Trash lists, once the Personal lock hides none of it.
+      Task {
+        let trashed = await library.trashedMeetings()
+        guard !trashed.isEmpty, await personalLock?.unlock(toActOn: trashed) != false else { return }
+        session.confirmingDeleteNow = DeleteNowRequest(
+          ids: trashed.map(\.id), title: LibraryWords.emptyTrashTitle(count: trashed.count))
+      }
     case .newFolder: newFolder()
     case .devices: showStatus(StatusRequest())
     }
@@ -540,12 +554,13 @@ private struct SearchWhilePresented: ViewModifier {
 enum LibraryChrome {
   /// The More menu's items, in order.
   enum MoreItem: Hashable, CaseIterable {
-    case newNote, select, newFolder, devices
+    case newNote, select, emptyTrash, newFolder, devices
 
     var title: String {
       switch self {
       case .newNote: return "New Note"
       case .select: return "Select Conversations"
+      case .emptyTrash: return LibraryWords.emptyTrash
       case .newFolder: return "New Folder…"
       case .devices: return StatusSheetModel.title
       }
@@ -555,6 +570,7 @@ enum LibraryChrome {
       switch self {
       case .newNote: return "square.and.pencil"
       case .select: return "checkmark.circle"
+      case .emptyTrash: return "trash"
       case .newFolder: return "folder.badge.plus"
       case .devices: return "macbook.and.iphone"
       }
@@ -570,9 +586,10 @@ enum LibraryChrome {
   }
 
   /// More: New Note (not in the Trash, which nothing is written into), Select Conversations when there's something to
-  /// select (never in the Trash, whose rows restore one at a time), New Folder…, and Devices.
-  static func more(in place: LibraryPlace, isEmpty: Bool) -> [MoreItem] {
-    (place.isTrash ? [] : [.newNote]) + (place.isTrash || isEmpty ? [] : [.select]) + [.newFolder, .devices]
+  /// select (never in the Trash, whose rows restore one at a time), Empty Trash… in a Trash that holds something, New Folder…, and Devices.
+  static func more(in place: LibraryPlace, isEmpty: Bool, trashIsEmpty: Bool = true) -> [MoreItem] {
+    (place.isTrash ? [] : [.newNote]) + (place.isTrash || isEmpty ? [] : [.select])
+      + (place.isTrash && !trashIsEmpty ? [.emptyTrash] : []) + [.newFolder, .devices]
   }
 }
 
@@ -801,7 +818,8 @@ enum PhoneActions {
       confirm: { session.confirmation = $0 },
       summarizeAgain: placement.map { placement in
         { id, choice in Task { await placement.summarizeAgain(id, as: choice) } }
-      })
+      },
+      identifySpeakers: { id, ask in library.requestProcessing(id, mode: .speakerRefresh, speakers: ask) })
     performer.perform(id, on: ids) { meetings in
       guard let first = meetings.first else { return }
       switch id {
@@ -816,7 +834,7 @@ enum PhoneActions {
         break  // The Mac's.
       case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
         break  // A recording's, in Info.
-      case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
+      case .copySummary, .process, .summarizeAgain, .identifySpeakers, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
         break  // The library's (`ConversationActionPerformer`).
       }
     }
@@ -826,7 +844,7 @@ enum PhoneActions {
 /// What this iPhone does for what a conversation's status offers, from the page and Info's Now row alike: the library's
 /// half through DaybookKit's `ConversationStatusActionHandler`, as the Mac does it, with its work processed as its menus
 /// process it (`PhoneActions.process`), and this iPhone's own here: Details, its downloads, Settings, where its summaries
-/// run, and upgrades. A Mac's queue isn't this iPhone's to pause, resume, or cancel.
+/// run, and upgrades. A Mac's queue isn't this iPhone's to pause, resume, or cancel; its own work it can give up.
 @MainActor
 struct PhoneStatusActions: ConversationStatusActionHandler {
   let library: LibraryController
@@ -846,7 +864,8 @@ struct PhoneStatusActions: ConversationStatusActionHandler {
   func performHere(_ action: ConversationStatusPresentation.Action, on id: UUID) {
     switch action {
     case .details(let words): session.sheet = .details(words)
-    case .pause, .resume, .cancel: break  // A Mac's queue.
+    case .pause, .resume: break  // A Mac's queue.
+    case .cancel: PhoneProcessor.current?.cancelStarted(id)
     case .cancelDownload: model?.models.cancelProcessingDownloads()
     case .downloadModels: model?.models.downloadProcessingSet()
     case .downloadSummaryModel:

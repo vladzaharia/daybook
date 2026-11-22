@@ -213,6 +213,13 @@ public final class PersonalLock {
         return await task.value
     }
 
+    /// Before acting on conversations the lock may hide (Delete Now, Empty Trash): asks to unlock, as a hidden row's
+    /// Unlock does, when it hides any of `meetings`. True once it hides none of them.
+    public func unlock(toActOn meetings: [Meeting]) async -> Bool {
+        guard meetings.contains(where: hides) else { return true }
+        return await unlock()
+    }
+
     /// Hides Personal again: the screen locked, the Mac slept or sat idle, or the iPhone's app left the screen. What
     /// shows a Personal conversation closes (`observe`).
     public func lock() {

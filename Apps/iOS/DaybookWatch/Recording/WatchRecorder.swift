@@ -140,6 +140,14 @@ final class WatchRecorder {
         return resend
     }
 
+    /// Marks this moment in the recording in progress (`SegmentWriter.bookmark`). Nil when nothing records.
+    func bookmark(at date: Date) -> WatchBookmark? {
+        guard let writer, let id = journal?.recording.id else { return nil }
+        let mark = WatchBookmark(recordingID: id, madeAt: date)
+        journal = writer.bookmark(mark)
+        return mark
+    }
+
     /// A segment of the recording in progress finished its transfer.
     func sent(_ index: Int) {
         if let writer { journal = writer.sent(index) }

@@ -53,6 +53,9 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
     /// request it carries. Its summary goes through the placement with its countdown, or straight to the cloud when
     /// the cloud was the better model.
     let upgrade: ProcessingRequest.Upgrade?
+    /// Set when the job is Identify Speakers for this conversation alone (`SpeakerAsk`): asked for here, or by the
+    /// request it carries. Its count is in `preferences`; a request with another ask isn't this job's to carry out.
+    let speakers: ProcessingRequest.SpeakerAsk?
     /// Set when the person chose Summarize on This Mac (after the cloud couldn't): stored only then, so earlier jobs
     /// decode and compare as before.
     private let summaryHere: Bool?
@@ -71,7 +74,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
          preferences: ProcessingPreferences = .init(), requestID: UUID? = nil, templateID: String? = nil,
          revisions: [String: String]? = nil, voiceEmbeddingModelID: String? = nil, languageFallbackModelID: String? = nil,
          smallTasksModelID: String? = nil, photoModelID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil,
-         summarizesHere: Bool = false, summarizesInCloud: Bool = false) {
+         speakers: ProcessingRequest.SpeakerAsk? = nil, summarizesHere: Bool = false, summarizesInCloud: Bool = false) {
         self.id = id; self.meetingID = meetingID; self.createdAt = createdAt; self.mode = mode
         self.transcriptionModelID = transcriptionModelID; self.summaryModelID = summaryModelID
         self.detectSpeakers = detectSpeakers; self.preferences = preferences.normalized
@@ -82,6 +85,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
         self.smallTasksModelID = smallTasksModelID
         self.photoModelID = photoModelID
         self.upgrade = upgrade
+        self.speakers = speakers
         summaryHere = summarizesHere ? true : nil
         summaryInCloud = summarizesInCloud ? true : nil
     }
@@ -93,7 +97,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                       requestID: request.id, templateID: request.templateID ?? templateID, revisions: revisions,
                       voiceEmbeddingModelID: voiceEmbeddingModelID, languageFallbackModelID: languageFallbackModelID,
                       smallTasksModelID: smallTasksModelID, photoModelID: photoModelID, upgrade: request.upgrade ?? upgrade,
-                      summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
+                      speakers: speakers, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
     }
 
     /// The same job with another summary model (and its frozen revision): a per-run model that went before the job ran.
@@ -105,7 +109,8 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                              summaryModelID: model, detectSpeakers: detectSpeakers, preferences: preferences, requestID: requestID,
                              templateID: templateID, revisions: revisions, voiceEmbeddingModelID: voiceEmbeddingModelID,
                              languageFallbackModelID: languageFallbackModelID, smallTasksModelID: smallTasksModelID,
-                             photoModelID: photoModelID, upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
+                             photoModelID: photoModelID, upgrade: upgrade, speakers: speakers, summarizesHere: summarizesHere,
+                             summarizesInCloud: summarizesInCloud)
     }
 
     /// The same job, no longer carrying out a request: it gave the request back.
@@ -114,7 +119,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                       summaryModelID: summaryModelID, detectSpeakers: detectSpeakers, preferences: preferences, templateID: templateID,
                       revisions: revisions, voiceEmbeddingModelID: voiceEmbeddingModelID, languageFallbackModelID: languageFallbackModelID,
                       smallTasksModelID: smallTasksModelID, photoModelID: photoModelID, upgrade: upgrade,
-                      summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
+                      speakers: speakers, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
     }
 
     /// The models the job runs, each with the revision it froze.

@@ -938,6 +938,12 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         XCTAssertNotNil(RecordingCompressionSchedule.startsLine(start, age: .after30Days, now: first))
         XCTAssertNil(RecordingCompressionSchedule.startsLine(start, age: .never, now: first))
         XCTAssertNil(RecordingCompressionSchedule.startsLine(start, age: .after30Days, now: start))
+        // Once this Mac may start, a device that can't compress yet is what holds it back; Never has nothing to wait for.
+        XCTAssertEqual(RecordingCompressionSchedule.statusLine(start, age: .after30Days, waitingOnDevices: true, now: start), "Waiting for another device")
+        XCTAssertNil(RecordingCompressionSchedule.statusLine(start, age: .after30Days, waitingOnDevices: false, now: start))
+        XCTAssertNil(RecordingCompressionSchedule.statusLine(start, age: .never, waitingOnDevices: true, now: start))
+        XCTAssertEqual(RecordingCompressionSchedule.statusLine(start, age: .after30Days, waitingOnDevices: true, now: first),
+                       RecordingCompressionSchedule.startsLine(start, age: .after30Days, now: first), "the start date comes first")
         // Another library (one this Mac joined, or one that replaced this one) waits its own week.
         let later = first.addingTimeInterval(20 * 86_400)
         XCTAssertEqual(RecordingCompressionSchedule.startDate(in: defaults, key: "start", library: "L2", now: later), later.addingTimeInterval(7 * 86_400))

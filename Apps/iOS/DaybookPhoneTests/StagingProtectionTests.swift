@@ -248,6 +248,32 @@ final class StagingProtectionTests: XCTestCase {
         XCTAssertEqual(model.library.controller.meeting(journal.id)?.tracks.first?.duration ?? 0, 2, accuracy: 0.05)
     }
 
+    /// A recording left behind for a conversation deleted for good (Delete Now) is never filed back: its folder goes.
+    func testBehaviorALeftoverForAConversationDeletedForGoodGoesWithIt() async throws {
+        let rig = RecorderRig()
+        let model = try makeModel(rig: rig)
+        try await model.library.reload()
+        let controller = model.library.controller
+        let id = controller.newMeeting(title: "Deleted for good")
+        await controller.flush()
+        _ = try await controller.moveToTrash(id)
+        _ = try await controller.deleteFromTrash([id])
+        let folder = model.library.stagingURL.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let part = folder.appendingPathComponent(CaptureSegment.fileName(index: 0))
+        let frames = try CaptureFiles.writeClosedSegment(to: part, seconds: 2, frequency: 440)
+        var journal = PhoneCaptureJournal(id: id, title: "Deleted for good", createdAt: Date(), format: CaptureFiles.format)
+        journal.state = .stopping
+        journal.segments = [CaptureSegment(index: 0, fileName: part.lastPathComponent, startOffset: 0, frameCount: frames, closed: true,
+                                           firstSampleHostTime: 0, clockAnchors: [], notes: nil)]
+        try journal.write(to: folder)
+
+        await model.recoverLeftovers()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+        XCTAssertNil(controller.meeting(id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: controller.rootURL.appendingPathComponent("Meetings/\(id.uuidString)").path))
+    }
+
     /// Recovery on a locked iPhone reads nothing and deletes nothing: a journal it can't read, with no notes, stays, and
     /// recovery runs again once the iPhone is unlocked.
     func testBehaviorRecoveryWhileLockedWaitsAndRunsAgainOnUnlock() async throws {

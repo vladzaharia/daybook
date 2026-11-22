@@ -31,6 +31,7 @@ final class LibraryStorageReportTests: XCTestCase {
         XCTAssertNil(report.recordedAudio)
         XCTAssertEqual(report.conversations, 3_500, "the rest the library keeps")
         XCTAssertEqual(report.models, 2_000_000)
+        XCTAssertEqual(report.trash, 0, "a Trash folder the Trash can't list isn't what Empty Trash frees (TrashDeletionTests)")
         XCTAssertEqual(report.library, 61_500)
         XCTAssertEqual(report.total, 2_061_500)
         XCTAssertEqual(StorageWords.audioSummary(bytes: report.audio, here: "this iPhone"), "\(ByteSize.format(58_000)) of audio")

@@ -133,6 +133,7 @@ struct SettingsView: View {
                 // One switch size across the panes; a mini switch is the Form's default in a few rows.
                 .macControlSize(.regular)
                 .navigationTitle(pane.title)
+                .toolbar { SettingsNavigationButtons() }
                 .defaultScrollAnchor(Self.snapshotAnchor)
             }
         }
@@ -145,6 +146,24 @@ struct SettingsView: View {
         #else
         nil
         #endif
+    }
+}
+
+/// Back and forward at the leading edge of every page's toolbar, as System Settings has them, so the toolbar is one height whether
+/// a pane or a page pushed from it shows: both are always there, and disabled where there is nowhere to go.
+struct SettingsNavigationButtons: ToolbarContent {
+    var back: (() -> Void)?
+    var forward: (() -> Void)?
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigation) {
+            Button { back?() } label: { Label("Back", systemImage: "chevron.left") }
+                .disabled(back == nil)
+                .help("Back")
+            Button { forward?() } label: { Label("Forward", systemImage: "chevron.right") }
+                .disabled(forward == nil)
+                .help("Forward")
+        }
     }
 }
 

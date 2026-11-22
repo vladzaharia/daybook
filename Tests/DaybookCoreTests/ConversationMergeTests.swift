@@ -378,6 +378,45 @@ final class ConversationMergeTests: XCTestCase {
         XCTAssertEqual(names, ["Speaker 1", "Speaker 3", "Speaker 4", "Speaker 5"])
     }
 
+    /// A passage given to another speaker comes with its conversation, the entry naming the speakers by their IDs here,
+    /// so the merged conversation (fused again) still gives it that person. An entry about a passage or a speaker that
+    /// didn't come is left behind.
+    func testBehaviorAPassageGivenAnotherSpeakerStaysTheirsInTheMergedConversation() throws {
+        var survivor = recorded("Standup", at: start, seconds: 60)
+        survivor.speakers = [Speaker(id: "S0", name: "Priya", sourceTrackID: survivor.tracks[0].id)]
+        var later = recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 60)
+        let theirs = later.tracks[0].id
+        later.speakers = [Speaker(id: "S0", name: "Speaker 1", sourceTrackID: theirs), Speaker(id: "run2:S1", name: "Speaker 2", sourceTrackID: theirs)]
+        later.transcripts = [TrackTranscript(trackID: theirs, segments: [
+            TranscriptSegment(trackID: theirs, start: 0, end: 5, text: "Let's plan", speakerID: "run2:S1"),
+            TranscriptSegment(trackID: theirs, start: 5, end: 9, text: "Budget first", speakerID: "run2:S1"),
+            TranscriptSegment(trackID: theirs, start: 9, end: 12, text: "Agreed", speakerID: nil),
+        ])]
+        later.applyFusion(SourceFusion.fuse(later).fusion)
+        // The last passage read with no speaker (fusion gives this one its neighbour's).
+        later.unifiedTranscript[2].speakerID = nil
+        let passages = later.unifiedTranscript
+        XCTAssertEqual(passages.count, 3)
+        later.giveSpeaker("S0", toPassages: [passages[1].id])
+        later.giveSpeaker("run2:S1", toPassages: [passages[2].id])
+        later.revisions.append(MeetingRevision(kind: .segmentSpeaker(UUID()), oldValue: "run2:S1", newValue: "S0"))
+        later.revisions.append(MeetingRevision(kind: .segmentSpeaker(passages[0].id), oldValue: "run2:S1", newValue: "gone"))
+
+        var merged = survivor
+        _ = fold(later, into: &merged, placement: ConversationMerge.placements([survivor, later])[later.id]!)
+        let theirS0 = try XCTUnwrap(merged.unifiedTranscript.first { $0.id == passages[1].id }?.speakerID)
+        XCTAssertNotEqual(theirS0, "S0", "not the survivor's Priya")
+        let carried = merged.revisions.filter { if case .segmentSpeaker = $0.kind { return true } else { return false } }
+        XCTAssertEqual(carried.map(\.kind), [.segmentSpeaker(passages[1].id), .segmentSpeaker(passages[2].id)])
+        XCTAssertEqual(carried.map(\.oldValue), ["run2:S1", ""], "a passage that began without a speaker still did")
+        XCTAssertEqual(carried.map(\.newValue), [theirS0, "run2:S1"])
+
+        merged.applyFusion(SourceFusion.fuse(merged).fusion)
+        XCTAssertEqual(merged.unifiedTranscript.first { $0.text == "Budget first" }?.speakerID, theirS0)
+        XCTAssertEqual(merged.unifiedTranscript.first { $0.text == "Agreed" }?.speakerID, "run2:S1")
+        XCTAssertEqual(merged.speakers.first { $0.id == "S0" }?.name, "Priya")
+    }
+
     func testBehaviorACorrectionNeedingReviewIsShiftedOntoTheMergedTimeline() throws {
         let survivor = recorded("Standup", at: start, seconds: 60)
         var later = recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 40)

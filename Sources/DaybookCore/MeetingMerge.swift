@@ -274,6 +274,8 @@ public enum MeetingMerge {
             revisions[revision.id] = revision
         }
         result.revisions = revisions.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
+        // One copy's transcript was kept; a passage the person gave another speaker on either copy keeps that speaker.
+        result.applyPassageSpeakers()
         result.updatedAt = max(local.updatedAt, remote.updatedAt)
         // A copy still waiting whose conversation either side folded in is that fold's.
         result.settleMergeCopies()

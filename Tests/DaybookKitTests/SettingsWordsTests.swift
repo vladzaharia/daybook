@@ -6,6 +6,12 @@ import XCTest
 /// Settings' words, written once: the same model is the same size, the same vocabulary the same count, and each
 /// label is one sentence-case string the iPhone title-cases where it draws it.
 final class SettingsWordsTests: XCTestCase {
+    func testMicrophoneRowNamesTheChosenInputElseAutomatic() {
+        XCTAssertEqual(SettingsWords.microphoneValue(.automatic), "Automatic")
+        let pods = MicrophoneChoice.Device(id: "pods", name: "AirPods Pro", kind: .bluetoothHeadset)
+        XCTAssertEqual(SettingsWords.microphoneValue(.device(pods)), "AirPods Pro")
+    }
+
     func testBehaviorEachRoleHasOneName() {
         XCTAssertEqual(SettingsWords.role(.speakerEmbedding), "Voice profiles")
         XCTAssertEqual(SettingsWords.role(.liveTranscription), "Live transcription")

@@ -336,17 +336,30 @@ private struct MacTrashList: View {
     @Bindable var state: AppState
     @State private var trashed: [Meeting] = []
     @State private var loaded = false
+    /// What a Delete Now or Empty Trash is asking about: the conversations it will delete when confirmed.
+    @State private var deleting: TrashDeleteRequest?
 
     var body: some View {
+        let groups = DateGroup.groups(for: trashed)
         List(selection: Bindable(state.window).openID) {
-            ForEach(DateGroup.groups(for: trashed)) { group in
-                Section(group.title) {
+            ForEach(groups) { group in
+                Section {
                     ForEach(group.meetings) { meeting in
                         TrashRowView(meeting: meeting, restore: { MacTrash.restore([meeting.id], state: state) },
                                      timeLabel: RowDate.format(meeting.date, group: group.title), restoresOnDemand: true,
                                      isSelected: state.window.openID == meeting.id)
                             .tag(meeting.id)
                             .listRowSeparator(.hidden)
+                    }
+                } header: {
+                    // Empty Trash… at the end of the list's first header, where it belongs to the list.
+                    HStack {
+                        Text(group.title)
+                        if group.id == groups.first?.id {
+                            Spacer()
+                            Button(LibraryWords.emptyTrash) { ask(.all(trashed)) }
+                                .buttonStyle(.daybookLink)
+                        }
                     }
                 }
                 .listSectionSeparator(.hidden)
@@ -355,9 +368,22 @@ private struct MacTrashList: View {
         .listStyle(.inset)
         .softTopScrollEdge()
         .contextMenu(forSelectionType: UUID.self) { ids in
-            Button { MacTrash.restore(Array(ids), state: state) } label: {
-                Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol)
+            if !ids.isEmpty {
+                Button { MacTrash.restore(Array(ids), state: state) } label: {
+                    Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol)
+                }
+                Button(LibraryWords.deleteNow, role: .destructive) { ask(.some(ids, in: trashed)) }
+                Divider()
             }
+            Button(LibraryWords.emptyTrash, role: .destructive) { ask(.all(trashed)) }
+                .disabled(trashed.isEmpty)
+        }
+        .alert(deleting?.title(hidden: { state.personalLock.hides($0) }) ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+               presenting: deleting) { request in
+            Button("Delete", role: .destructive) { Task { await state.deleteFromTrash(request.ids) } }
+            Button("Cancel", role: .cancel) { }
+        } message: { _ in
+            Text(LibraryWords.deleteNowMessage)
         }
         // ⌘⌫ puts the selected one back, as Put Back does in Finder's Trash.
         .onKeyPress(.delete, phases: .down) { press in
@@ -377,6 +403,35 @@ private struct MacTrashList: View {
             trashed = read
             loaded = true
         }
+    }
+
+    /// Asks Delete Now's or Empty Trash's question, once the Personal lock hides none of what it would delete: a hidden
+    /// one asks to unlock first.
+    private func ask(_ request: TrashDeleteRequest) {
+        guard !request.meetings.isEmpty else { return }
+        Task {
+            guard await state.personalLock.unlock(toActOn: request.meetings) else { return }
+            deleting = request
+        }
+    }
+}
+
+/// The conversations a Delete Now or an Empty Trash will delete: the ones in the Trash when it was asked (so one put
+/// back, or moved in, since isn't touched), and their titles for the question.
+private struct TrashDeleteRequest: Identifiable {
+    let meetings: [Meeting]
+    let isEmptying: Bool
+    var id: [UUID] { ids }
+    var ids: [UUID] { meetings.map(\.id) }
+
+    static func some(_ ids: Set<UUID>, in trashed: [Meeting]) -> TrashDeleteRequest {
+        TrashDeleteRequest(meetings: trashed.filter { ids.contains($0.id) }, isEmptying: false)
+    }
+
+    static func all(_ trashed: [Meeting]) -> TrashDeleteRequest { TrashDeleteRequest(meetings: trashed, isEmptying: true) }
+
+    func title(hidden: (Meeting) -> Bool) -> String {
+        isEmptying ? LibraryWords.emptyTrashTitle(count: meetings.count) : LibraryWords.deleteNowTitle(meetings, hidden: hidden)
     }
 }
 
@@ -539,7 +594,7 @@ enum MacActions {
                                                for: meeting, in: state.meetings, context: { MeetingInspector.context(state, $0) },
                                                merging: state.library.mergingIDs,
                                                hidden: { state.personalLock.hides($0) || !state.personalLock.lists($0) }),
-                                           isMerging: state.library.mergingIDs.contains(meeting.id))
+                                           isMerging: state.library.mergingIDs.contains(meeting.id), speakerCounts: state.speakerCountsOffered)
     }
 
     /// How the Mac processes a conversation in a mode, from its menus and its status alike: its queue.
@@ -569,7 +624,8 @@ enum MacActions {
             },
             copy: { LocalPasteboard.copy($0) },
             confirm: { state.window.confirmation = $0 },
-            summarizeAgain: { state.summarizeAgain($0, as: $1) })
+            summarizeAgain: { state.summarizeAgain($0, as: $1) },
+            identifySpeakers: { state.processor.enqueue($0, mode: .speakerRefresh, speakers: $1) })
         performer.perform(id, on: ids) { meetings in
             guard let first = meetings.first else { return }
             switch id {
@@ -589,7 +645,7 @@ enum MacActions {
                 break // The iPhone's.
             case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
                 break // A recording's, in the inspector.
-            case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
+            case .copySummary, .process, .summarizeAgain, .identifySpeakers, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
                 break // The library's (`ConversationActionPerformer`).
             }
         }

@@ -6,8 +6,12 @@ public struct CorrectionTransferIssue: Codable, Equatable, Identifiable, Sendabl
     public var originalSegment: TranscriptSegment
     public var candidateSegmentIDs: [UUID]
     public var reason: String
-    public init(originalSegment: TranscriptSegment, candidateSegmentIDs: [UUID] = [], reason: String) {
+    /// The speaker the person gave the passage (`Meeting.passageSpeakers`), which the passage it's applied to gets; nil
+    /// for a passage they only corrected. A passage they gave a speaker without correcting it keeps the new words.
+    public var speakerID: String?
+    public init(originalSegment: TranscriptSegment, candidateSegmentIDs: [UUID] = [], reason: String, speakerID: String? = nil) {
         self.originalSegment = originalSegment; self.candidateSegmentIDs = candidateSegmentIDs; self.reason = reason
+        self.speakerID = speakerID
     }
 }
 
@@ -24,6 +28,11 @@ public struct PreparedFusion: Sendable {
 }
 
 extension Meeting {
+    /// Whether the issue is about words the person corrected (a `.segment` entry), not only the speaker they gave it.
+    public func correctsWords(_ issue: CorrectionTransferIssue) -> Bool {
+        issue.speakerID == nil || revisions.contains { $0.kind == .segment(issue.id) }
+    }
+
     /// Carries saved corrections over to a fusion result and finds the words the transcript may have wrong, for
     /// `applyFusion(_:)` later. Pure: run it off the main actor on a snapshot.
     public func preparingFusion(_ result: FusionResult, ranking: TranscriptFlags.Ranking? = nil) -> PreparedFusion {
@@ -43,7 +52,12 @@ extension Meeting {
 
 enum CorrectionTransfer {
     struct Result: Sendable { var segments: [TranscriptSegment]; var issues: [CorrectionTransferIssue] }
-    private struct Proposal { var original: TranscriptSegment; var candidates: [Int]; var reviewCandidates: [Int] }
+    /// Where one passage the person changed goes: its words if they corrected them (`corrects`), its speaker if they gave
+    /// it one (`speakerID`).
+    private struct Proposal {
+        var original: TranscriptSegment; var candidates: [Int]; var reviewCandidates: [Int]
+        var corrects = true; var speakerID: String?
+    }
 
     /// Everything `apply` reads from the conversation.
     struct Basis: Equatable, Sendable {
@@ -71,17 +85,30 @@ enum CorrectionTransfer {
         let unified = Dictionary(meeting.unifiedTranscript.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let pending = Dictionary((meeting.correctionTransferIssues ?? []).map { ($0.id, $0.originalSegment) }, uniquingKeysWith: { first, _ in first })
         let raw = Dictionary(meeting.transcripts.lazy.flatMap(\.segments).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var originals: [TranscriptSegment] = []
-        for (id, edit) in edits {
-            guard seen.insert(id).inserted, !transferred.contains(id) else { continue }
-            if var original = unified[id] ?? pending[id] ?? raw[id] {
-                // The revision is authoritative even after a prior fusion no longer displays this passage.
-                original.text = edit.newValue
-                if original.provenance.isEmpty, let source = raw[id] {
-                    original.provenance = [provenance(source)]
-                }
-                originals.append(original)
+        func original(_ id: UUID) -> TranscriptSegment? {
+            guard var original = unified[id] ?? pending[id] ?? raw[id] else { return nil }
+            if original.provenance.isEmpty, let source = raw[id] {
+                original.provenance = [provenance(source)]
             }
+            return original
+        }
+        // A passage the person gave another speaker goes over as a corrected one does, to the same passage only: a speaker
+        // the conversation still has, the passage's words as they read (`Meeting.passageSpeakers`). In passage order, so
+        // every device decides alike.
+        let known = Set(meeting.speakers.map(\.id))
+        let pins = meeting.passageSpeakers.filter { known.contains($0.value) }
+        var originals: [(segment: TranscriptSegment, corrects: Bool, speakerID: String?)] = []
+        for (id, edit) in edits {
+            guard seen.insert(id).inserted, !transferred.contains(id), var segment = original(id) else { continue }
+            // The revision is authoritative even after a prior fusion no longer displays this passage.
+            segment.text = edit.newValue
+            if let pin = pins[id] { segment.speakerID = pin }
+            originals.append((segment, true, pins[id]))
+        }
+        for (id, speakerID) in pins.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            guard seen.insert(id).inserted, !transferred.contains(id), var segment = original(id) else { continue }
+            segment.speakerID = speakerID
+            originals.append((segment, false, speakerID))
         }
 
         // Passages by their own identity and by every source passage they cite.
@@ -89,7 +116,7 @@ enum CorrectionTransfer {
         for (index, candidate) in segments.enumerated() {
             for identity in Set([candidate.id] + candidate.provenance.map(\.segmentID)) { byIdentity[identity, default: []].append(index) }
         }
-        let proposals = originals.map { original -> Proposal in
+        func propose(_ original: TranscriptSegment) -> Proposal {
             let identities = Set(original.provenance.map(\.segmentID) + [original.id])
             let exact = Set(identities.flatMap { byIdentity[$0] ?? [] }).sorted()
             if exact.count > 1 {
@@ -116,30 +143,41 @@ enum CorrectionTransfer {
             }
             return Proposal(original: original, candidates: timed, reviewCandidates: review)
         }
+        let proposals = originals.map { item -> Proposal in
+            var proposal = propose(item.segment)
+            proposal.corrects = item.corrects
+            proposal.speakerID = item.speakerID
+            return proposal
+        }
 
         var output = segments
         var issues: [CorrectionTransferIssue] = []
         let unique = proposals.filter { $0.candidates.count == 1 }
         var applied = Set<Int>()
         for proposal in proposals {
+            func review(_ candidates: [Int], _ reason: String) {
+                issues.append(CorrectionTransferIssue(originalSegment: proposal.original, candidateSegmentIDs: candidates.map { segments[$0].id },
+                                                      reason: reason, speakerID: proposal.speakerID))
+            }
             guard let target = proposal.candidates.first, proposal.candidates.count == 1 else {
-                issues.append(CorrectionTransferIssue(originalSegment: proposal.original,
-                    candidateSegmentIDs: (proposal.candidates.isEmpty ? proposal.reviewCandidates : proposal.candidates).map { segments[$0].id },
-                    reason: proposal.candidates.isEmpty
-                        ? "The new transcript changed this passage’s source timing or wording, or its source is unaligned. Review the saved correction before applying it."
-                        : "More than one new passage matches this correction. Choose the intended passage after reviewing the source audio."))
+                review(proposal.candidates.isEmpty ? proposal.reviewCandidates : proposal.candidates, proposal.candidates.isEmpty
+                    ? "The new transcript changed this passage’s source timing or wording, or its source is unaligned. Review the saved correction before applying it."
+                    : "More than one new passage matches this correction. Choose the intended passage after reviewing the source audio.")
                 continue
             }
             let contenders = unique.filter { $0.candidates[0] == target }
-            guard Set(contenders.map { $0.original.text }).count == 1 else {
-                issues.append(CorrectionTransferIssue(originalSegment: proposal.original,
-                    candidateSegmentIDs: [segments[target].id],
-                    reason: "Different saved corrections match the same new passage. Review which wording to keep."))
+            if proposal.corrects, Set(contenders.filter(\.corrects).map(\.original.text)).count > 1 {
+                review([target], "Different saved corrections match the same new passage. Review which wording to keep.")
                 continue
             }
-            guard applied.insert(target).inserted else { continue }
-            output[target].id = proposal.original.id
-            output[target].text = proposal.original.text
+            if proposal.speakerID != nil, Set(contenders.compactMap(\.speakerID)).count > 1 {
+                review([target], "Passages given to different speakers match the same new passage. Review who said it.")
+                continue
+            }
+            // The passage keeps its identity, so what the person did to it is found again next time (and in Version History).
+            if applied.insert(target).inserted { output[target].id = proposal.original.id }
+            if proposal.corrects { output[target].text = proposal.original.text }
+            if let speakerID = proposal.speakerID { output[target].speakerID = speakerID }
         }
         return Result(segments: output, issues: issues)
     }

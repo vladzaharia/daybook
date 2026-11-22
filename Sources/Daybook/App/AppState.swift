@@ -78,6 +78,8 @@ final class AppState {
     let launchCheck: LibraryLaunchCheck
     /// The library notice's button and the message it belongs to (`post(_:action:)`).
     private var noticeAction: (message: String, action: LibraryNoticeAction)?
+    /// This run's Move to Trash actions, while any of what they moved is still theirs to put back (`deleteFromTrash`).
+    @ObservationIgnored private var trashRecords: [TrashRecord] = []
     /// Recordings this Mac's capture ended on its own (a microphone that failed, sleep, a disk that couldn't keep up),
     /// by conversation: the recorder's one sentence for why. What was recorded is saved either way.
     private(set) var unexpectedStops: [UUID: String] = [:]
@@ -775,7 +777,15 @@ final class AppState {
         }
         guard !failures.isEmpty else { return }
         guard imported == 0 else {
-            post(LibraryWords.importSummary(imported: imported, failed: failures.map(\.name)))
+            // Details lists each file that didn't come in, and why.
+            let lines = LibraryWords.importSummary(imported: imported, failed: failures.map(\.name))
+            post(Array(lines.dropLast()))
+            if let last = lines.last {
+                let details = LibraryWords.importFailureDetails(failures.map { ($0.name, $0.error.localizedDescription) })
+                post(last, action: LibraryNoticeAction(title: "Details") { [weak self] in
+                    self?.problem = AppProblem(title: "Couldn’t Import Audio", message: last, details: details)
+                })
+            }
             return
         }
         if failures.count == 1 {
@@ -1217,7 +1227,9 @@ final class AppState {
             let title = trashed.count == 1 ? titles[ids.firstIndex(of: trashed[0]) ?? 0].trimmingCharacters(in: .whitespaces) : ""
             let message = trashed.count > 1 ? "Moved \(trashed.count) conversations to the Trash."
                 : title.isEmpty ? "Moved a conversation to the Trash." : "Moved “\(title)” to the Trash."
-            let record = TrashRecord(ids: trashed, message: message)
+            let record = TrashRecord(ids: trashed, message: message, undoManager: undoManager)
+            trashRecords.removeAll { $0.ids.isEmpty }
+            trashRecords.append(record)
             if let undoManager {
                 Self.registerUndo(on: undoManager, name: "Move to Trash", target: record) { [weak self, record] in
                     self?.restore(record, undoManager: undoManager)
@@ -1228,6 +1240,25 @@ final class AppState {
                 self?.restore(record, undoManager: nil)
             })
         }
+    }
+
+    /// Deletes conversations from the Trash for good (Delete Now, Empty Trash), as the library's one deletion does
+    /// (`LibraryController.deleteFromTrash`), and says what went. A Move to Trash's Undo (Edit › Undo, the notice's)
+    /// stops offering what's gone, and a recording left in `Staging` for one of them goes with it.
+    func deleteFromTrash(_ ids: [UUID]) async {
+        do {
+            let result = try await library.deleteFromTrash(ids)
+            let deleted = Set(result.deleted)
+            for record in trashRecords where !deleted.isDisjoint(with: record.ids) {
+                record.ids.removeAll(where: deleted.contains)
+                guard record.ids.isEmpty else { continue }
+                record.undoManager?.removeAllActions(withTarget: record)
+                withdraw(record.message)
+            }
+            trashRecords.removeAll { $0.ids.isEmpty }
+            for id in deleted { try? FileManager.default.removeItem(at: storageURL.appendingPathComponent("Staging/\(id.uuidString)", isDirectory: true)) }
+            post(LibraryWords.deletedNow(deleted: result.deleted.count, failed: result.failed.count))
+        } catch { report("Couldn’t Delete", "Try again.", error) }
     }
 
     /// Puts trashed conversations back and selects the first. With `undoManager` (Edit › Undo), Redo moves them to the
@@ -1440,9 +1471,13 @@ extension AppState {
         guard let folders = try? FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: [.isDirectoryKey]) else { return }
         for folder in folders {
             guard let id = UUID(uuidString: folder.lastPathComponent) else { continue }
-            // An interrupted recovery must never resurrect something the user trashed.
+            // An interrupted recovery must never resurrect something the user trashed. Its staging is named by it: it's
+            // kept while the conversation is in the Trash, and goes once it's deleted for good.
             let trash = storageURL.appendingPathComponent("Trash").appendingPathComponent(id.uuidString)
-            guard !FileManager.default.fileExists(atPath: trash.path) else { continue }
+            guard !FileManager.default.fileExists(atPath: trash.path) else {
+                if LibraryController.isDeletedForGood(id, in: storageURL) { try? FileManager.default.removeItem(at: folder) }
+                continue
+            }
             do {
                 guard let result = try CaptureRecovery.recover(in: folder), !result.tracks.isEmpty else { continue }
                 if !meetings.contains(where: { $0.id == id }) {
@@ -1495,13 +1530,16 @@ struct ImportSidecar {
 /// The library's errors, shared with the devices that import into it.
 typealias AppError = DaybookError
 
-/// Conversations moved to the Trash together, for Undo and Redo: their IDs change when a synced deletion comes back.
+/// Conversations moved to the Trash together, for Undo and Redo: their IDs change when a synced deletion comes back, and
+/// one deleted for good (Delete Now) leaves them.
 @MainActor
 final class TrashRecord {
     var ids: [UUID]
     /// The notice's line for it.
     let message: String
-    init(ids: [UUID], message: String) { self.ids = ids; self.message = message }
+    /// Where its Undo is registered (Edit › Undo), to take it back once nothing is left to put back.
+    weak var undoManager: UndoManager?
+    init(ids: [UUID], message: String, undoManager: UndoManager? = nil) { self.ids = ids; self.message = message; self.undoManager = undoManager }
 }
 
 /// A text button the library notice offers with what it says (`AppState.post(_:action:)`): Undo, Show, Show in Finder.

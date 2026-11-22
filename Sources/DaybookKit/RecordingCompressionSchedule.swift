@@ -39,6 +39,13 @@ public enum RecordingCompressionSchedule {
         return "Starts \(start.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
+    /// What the setting's row says while nothing starts: "Starts Nov 27", or, once this Mac may start, "Waiting for
+    /// another device" when a device seen lately can't compress yet (`RecordingCompressionEligibility.Context`).
+    public static func statusLine(_ start: Date?, age: RecordingCompressionAge, waitingOnDevices: Bool, now: Date = Date()) -> String? {
+        if let starts = startsLine(start, age: age, now: now) { return starts }
+        return age != .never && waitingOnDevices ? "Waiting for another device" : nil
+    }
+
     /// Info › Audio's words for a compressed recording: "Compressed · 14 MB".
     public static func infoLine(_ track: RecordingTrack) -> String? {
         guard let encoding = track.encoding else { return nil }

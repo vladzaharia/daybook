@@ -18,6 +18,23 @@ final class VersionHistoryRestoreTests: XCTestCase {
         XCTAssertFalse(RevisionRestore.canRestore(change, in: meeting), "Nothing left to restore once the text matches")
     }
 
+    /// A passage that began with no speaker, given one, is given none again from Version History.
+    func testBehaviorRestoringAMovedPassageThatHadNoSpeakerGivesItNone() {
+        var meeting = Meeting(title: "Sync", unifiedTranscript: [TranscriptSegment(trackID: UUID(), start: 0, end: 2, text: "Hello")],
+                              speakers: [Speaker(id: "S1", name: "Speaker 1")])
+        let segment = meeting.unifiedTranscript[0].id
+        XCTAssertTrue(meeting.giveSpeaker("S1", toPassages: [segment]))
+        let move = meeting.revisions[0]
+        XCTAssertEqual(move.oldValue, "")
+
+        XCTAssertTrue(RevisionRestore.canRestore(move, in: meeting))
+        RevisionRestore.apply(move, to: &meeting)
+        XCTAssertNil(meeting.unifiedTranscript[0].speakerID)
+        XCTAssertEqual(meeting.revisions.last?.newValue, "")
+        XCTAssertNil(meeting.passageSpeakers[segment])
+        XCTAssertFalse(RevisionRestore.canRestore(move, in: meeting))
+    }
+
     /// A photo added, deleted, or put back, and a recording removed or moved, keep only a mark of what happened: the title
     /// says it, with no Before and After of stored words ("added", "present", "removed").
     func testAPhotoOrRecordingChangeIsSaidByItsTitleAlone() {
