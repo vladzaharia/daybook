@@ -166,6 +166,8 @@ jobs:
       # A bundle that fails beside the other lane runs again on its own (--retry-alone), as it ran before there were
       # lanes; a pass then leaves a "Passed alone" warning. The logs print when every lane is done, so a hung test
       # fails the step at its timeout (and the logs upload) rather than running out the job's.
+      # The lanes are balanced by bundle time (about 190 s DaybookKitTests, 430 s DaybookCoreTests, 250 s DaybookTests):
+      # before DaybookKitTests moved to lane 1, lane 2 ran about 12 minutes and lane 1 about 6.
       - name: Test, in two lanes
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 30
@@ -176,8 +178,8 @@ jobs:
           scripts/ci/test-lanes.sh --expect "$(paste -sd ' ' - <<< "$targets")" \
             --products "$(swift build --show-bin-path)" --logs build/test-results --retry-alone \
             --skip DaybookCoreTests 'AudioAlignerTests/testThirtyMinutePairAlignsWithinBudget$' \
-            'DaybookTests DaybookIntelligenceTests DaybookLinkTests DaybookWatchLinkTests DaybookUITests DaybookDesignTests DaybookCaptionsTests' \
-            'DaybookCoreTests DaybookKitTests DaybookDevicesTests DaybookLiveTests'
+            'DaybookTests DaybookKitTests DaybookIntelligenceTests DaybookLinkTests DaybookWatchLinkTests DaybookUITests DaybookDesignTests DaybookCaptionsTests' \
+            'DaybookCoreTests DaybookDevicesTests DaybookLiveTests'
       # A 30-minute synthetic pair must align within 15 s. Hosted runners are small shared VMs, so the
       # test runs alone, after the others, with one retry; a pass on the retry leaves a warning.
       - name: Timing budget (alone, one retry)
